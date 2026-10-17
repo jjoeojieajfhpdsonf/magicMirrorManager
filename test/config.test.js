@@ -131,3 +131,9 @@ test("module register defaults are found", () => {
 	const reg = P.findModuleRegister(src);
 	assert.deepEqual(reg.props.map((p) => p.key), ["defaults", null]);
 });
+
+test("replacing a multi-line value keeps the surrounding indentation", () => {
+	const out = C.ops.setOption(sample, { index: 3, module: "calendar", key: "calendars", value: [{ symbol: "calendar", url: "https://example.com/a.ics" }] }).text;
+	assert.match(out, /\n\t\t\t\tcalendars: \[\n\t\t\t\t\t\{\n\t\t\t\t\t\tsymbol: "calendar",\n\t\t\t\t\t\turl: "https:\/\/example.com\/a.ics"\n\t\t\t\t\t\}\n\t\t\t\t\]/);
+	assert.equal(evalCfg(out).modules[3].config.calendars[0].symbol, "calendar");
+});

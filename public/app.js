@@ -28,6 +28,17 @@ function fill(el, ...kids) {
 	return el;
 }
 
+// Grows a textarea with its content (up to 60 % of the screen).
+function autosize(ta) {
+	const fit = () => {
+		ta.style.height = "auto";
+		ta.style.height = `${Math.min(ta.scrollHeight + 2, window.innerHeight * 0.6)}px`;
+	};
+	ta.addEventListener("input", fit);
+	requestAnimationFrame(fit);
+	return ta;
+}
+
 const ICONS = {
 	mirror: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'><rect x='5' y='2.5' width='14' height='19' rx='3'/><path d='M8.5 6.5h3M8.5 9h5M12.5 17.5h3'/></svg>",
 	modules: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round'><rect x='3.5' y='3.5' width='7' height='7' rx='2'/><rect x='13.5' y='3.5' width='7' height='7' rx='2'/><rect x='3.5' y='13.5' width='7' height='7' rx='2'/><rect x='13.5' y='13.5' width='7' height='7' rx='2'/></svg>",
@@ -115,16 +126,19 @@ function applied(res, sent) {
 	refreshMirror();
 }
 
-async function refresh() {
+// soft: only redraw when something actually changed (e.g. when coming back to the tab),
+// so an open settings panel keeps its state.
+async function refresh({ soft = false } = {}) {
 	const st = await guard(() => api("GET", "/api/state"));
-	if (st) {
-		S.state = st;
-		if (st.settings) {
-			S.landscape = st.settings.orientation === "landscape";
-			S.view = st.settings.view || "live";
-		}
+	if (!st) return;
+	const same = soft && S.state && st.rev === S.state.rev && JSON.stringify(st.draft) === JSON.stringify(S.state.draft) && JSON.stringify(st.settings) === JSON.stringify(S.state.settings);
+	S.state = st;
+	if (st.settings) {
+		S.landscape = st.settings.orientation === "landscape";
+		S.view = st.settings.view || "live";
 	}
-	render();
+	if (same) renderPending();
+	else render();
 }
 
 async function loadModules() {
@@ -644,7 +658,7 @@ function setupDrag(root) {
 		if (!pending) return;
 		const src = pending.chip;
 		const entry = S.state.entries[Number(src.dataset.index)];
-		const ghost = h("div", { class: "chip ghost" }, moduleLabel(entry && entry.module));
+		const ghost = h("div", { class: "chip drag-ghost" }, moduleLabel(entry && entry.module));
 		document.body.append(ghost);
 		src.classList.add("placeholder-src");
 		root.classList.add("dragging");
@@ -762,10 +776,13 @@ function setupDrag(root) {
 	});
 	root.addEventListener("click", (ev) => {
 		const c = ev.target.closest(".chip, .hit");
-		if (!c) return;
+		if (!c) {
+			if (isWide() && S.panel && ev.target.closest(".mirror")) showPanel(null);
+			return;
+		}
 		if (suppressClick) return;
 		const index = Number(c.dataset.index);
-		if (isWide()) showPanel("entry", index);
+		if (isWide()) showPanel(S.selected === index && S.panel === "entry" ? null : "entry", index);
 		else entrySheet(index);
 	});
 	// remove global listeners when the view is replaced
@@ -867,6 +884,7 @@ async function entrySheet(index, host = null) {
 	let d = null;
 	let idx = index;
 	let moreOpen = false;
+	const openForms = new Set();
 
 	async function load() {
 		d = await guard(() => api("GET", `/api/entry/${idx}`));
@@ -936,9 +954,14 @@ async function entrySheet(index, host = null) {
 		const field = (key) => optionField(key, cur.get(key), defs.find((x) => x.key === key));
 		if (set.length) wrap.append(h("div", { class: "card" }, set.map(field)));
 		if (others.length) {
-			const det = h("details", { style: "margin-top:8px", open: moreOpen }, h("summary", {}, t("entry.more", { n: others.length })), h("div", { class: "card" }, others.map(field)));
-			det.addEventListener("toggle", () => (moreOpen = det.open));
-			wrap.append(det);
+			const label = set.length ? t("entry.more", { n: others.length }) : t("entry.all", { n: others.length });
+			const list = h("div", { class: "card", style: "margin-top:8px", hidden: !moreOpen }, others.map(field));
+			const toggle = h("button", { class: `row more-toggle${moreOpen ? " open" : ""}`, onclick: () => {
+				moreOpen = !moreOpen;
+				list.hidden = !moreOpen;
+				toggle.classList.toggle("open", moreOpen);
+			} }, h("span", { class: "grow" }, label), h("span", { class: "chev", html: ICONS.chev }));
+			wrap.append(h("div", { class: "card", style: "margin-top:8px" }, toggle), list);
 		}
 		if (!defs.length && !set.length) wrap.append(h("div", { class: "note" }, t("entry.noDefaults")));
 		wrap.append(customAdder());
@@ -946,8 +969,8 @@ async function entrySheet(index, host = null) {
 	}
 
 	function summary(v) {
-		if (Array.isArray(v)) return t("entry.items", { n: v.length });
-		if (v && typeof v === "object") return t("entry.fields", { n: Object.keys(v).length });
+		if (Array.isArray(v)) return t(v.length === 1 ? "entry.item" : "entry.items", { n: v.length });
+		if (v && typeof v === "object") return t(Object.keys(v).length === 1 ? "entry.field" : "entry.fields", { n: Object.keys(v).length });
 		if (v === null) return "null";
 		return String(v);
 	}
@@ -965,7 +988,7 @@ async function entrySheet(index, host = null) {
 		const label = h("div", { class: "label" }, h("div", { class: "k" }, key), isSet && hint ? h("div", { class: "d" }, hint) : null);
 		const reset = isSet ? h("button", { class: "reset", title: t("entry.reset"), "aria-label": t("entry.reset"), onclick: () => op({ op: "resetOption", key }) }, icon("undo")) : null;
 		const setValue = (value) => {
-			if (def && def.simple && value === def.value) return op(isSet ? { op: "resetOption", key } : null);
+			if (def && def.simple && value === def.value) return isSet ? op({ op: "resetOption", key }) : undefined;
 			return op({ op: "setOption", key, value });
 		};
 		if (type === "boolean") {
@@ -989,12 +1012,27 @@ async function entrySheet(index, host = null) {
 			});
 			return h("div", { class: `field${isSet ? " changed" : ""}` }, label, reset, input);
 		}
-		// complex value: show a summary, edit as code
+		// complex value: a form for plain data, code only for functions and the like
 		const box = h("div", { class: `field col${isSet ? " changed" : ""}` });
+		if (src.data) {
+			const isOpen = openForms.has(key);
+			const sumBtn = h("button", { class: `value-sum${isOpen ? " open" : ""}`, onclick: () => {
+				if (openForms.has(key)) openForms.delete(key);
+				else openForms.add(key);
+				draw();
+			} }, summary(src.value));
+			box.append(h("div", { class: "top-line" }, label, reset, sumBtn));
+			if (isOpen) {
+				const save = (v) => (def && def.data && sameData(v, def.value) ? op({ op: "resetOption", key }) : op({ op: "setOption", key, value: v }));
+				const form = dataEditor(src.value, save, def && def.data ? def.value : undefined);
+				if (form) box.append(h("div", { class: "form-wrap" }, form));
+			}
+			return box;
+		}
 		const sumBtn = h("button", { class: "value-sum", onclick: () => openEditor() }, src.dynamic ? t("entry.dynamic") : summary(src.value));
 		box.append(h("div", { class: "top-line" }, label, reset, sumBtn));
 		function openEditor() {
-			const ta = h("textarea", { class: "code", spellcheck: "false", value: src.code, rows: Math.min(14, Math.max(4, src.code.split("\n").length + 1)) });
+			const ta = autosize(h("textarea", { class: "code", spellcheck: "false", value: src.code }));
 			const err = h("div", { class: "note bad", hidden: true });
 			const row = h(
 				"div",
@@ -1024,13 +1062,13 @@ async function entrySheet(index, host = null) {
 
 	function customAdder() {
 		const key = h("input", { class: "input wide", placeholder: t("entry.customKey"), autocapitalize: "off", spellcheck: "false" });
-		const val = h("textarea", { class: "code", style: "min-height:70px", placeholder: t("entry.customValue"), spellcheck: "false" });
+		const val = h("input", { class: "input wide", placeholder: t("entry.customValue"), spellcheck: "false" });
 		const err = h("div", { class: "note bad", hidden: true });
 		const add = h("button", {
 			class: "btn",
 			onclick: async () => {
 				try {
-					const res = await api("POST", "/api/op", { op: "setOption", index: idx, module: d.module, key: key.value.trim(), code: val.value });
+					const res = await api("POST", "/api/op", { op: "setOption", index: idx, module: d.module, key: key.value.trim(), value: guessValue(val.value) });
 					applied(res);
 					await load();
 				} catch (e) {
@@ -1642,6 +1680,25 @@ async function configSheet() {
 	);
 }
 
+// Value typed into "custom setting": true/false, numbers, JSON lists/objects, else text.
+function guessValue(text) {
+	const v = String(text).trim();
+	if (v === "true" || v === "false") return v === "true";
+	if (v !== "" && Number.isFinite(Number(v))) return Number(v);
+	if (/^[[{]/.test(v)) {
+		try {
+			return JSON.parse(v);
+		} catch {
+			// keep as text
+		}
+	}
+	return v;
+}
+
+document.addEventListener("keydown", (e) => {
+	if (e.key === "Escape" && !document.querySelector(".sheet") && isWide() && S.panel && S.tab === "mirror") showPanel(null);
+});
+
 // ---------- start ----------
 
 // Resume a job that is still running (e.g. after reloading the page).
@@ -1658,7 +1715,7 @@ async function start() {
 		if (S.tab === "modules" && !document.querySelector(".sheet")) renderView();
 	});
 	document.addEventListener("visibilitychange", () => {
-		if (!document.hidden && !document.querySelector(".sheet")) refresh();
+		if (!document.hidden && !document.querySelector(".sheet")) refresh({ soft: true });
 	});
 }
 

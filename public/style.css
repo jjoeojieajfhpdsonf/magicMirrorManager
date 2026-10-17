@@ -156,7 +156,7 @@ button.row:active { background: var(--surface-2); }
 .chip.placeholder-src { opacity: .15; }
 .chip:active { transform: scale(0.97); }
 .drop-line { height: 3px; width: 70%; border-radius: 2px; background: var(--accent); align-self: center; }
-.ghost {
+.drag-ghost {
 	position: fixed; z-index: 100; pointer-events: none; transform: translate(-50%, -50%) scale(1.05);
 	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); background: #2a3039 !important; opacity: 1 !important;
 }
@@ -239,6 +239,8 @@ textarea.code, .code-view {
 }
 textarea.code:focus { border-color: rgba(143, 180, 255, 0.45); }
 textarea.code.big { min-height: 55vh; }
+/* value editors: wrap long lines and grow with the content (see autosize() in app.js) */
+textarea.code:not(.big) { white-space: pre-wrap; overflow-wrap: anywhere; resize: none; overflow-y: auto; tab-size: 2; min-height: 72px; }
 .reset { color: var(--muted); width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; }
 .reset svg { width: 16px; height: 16px; }
 .value-sum { color: var(--muted); font-size: 13px; padding: 6px 10px; border-radius: 9px; background: var(--surface-2); white-space: nowrap; }
@@ -439,3 +441,29 @@ details[open] > summary::before { transform: rotate(90deg); }
 .live-frame.ready .live-loading { opacity: 0; pointer-events: none; }
 .spinner { width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--surface-3); border-top: 2px solid var(--accent); animation: spin .8s linear infinite; }
 .dragging .tray .region.static.empty { display: none; }
+
+/* ---------- form editor for lists and objects ---------- */
+.value-sum.open { background: var(--accent-soft); color: var(--accent); }
+.form-wrap { margin-top: 10px; }
+.form-obj { display: flex; flex-direction: column; gap: 8px; }
+.form-row { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+.form-row .form-key { flex: 0 0 auto; min-width: 84px; }
+.form-row.wide .grow-input { flex: 1; min-width: 0; }
+.form-row:not(.wide) > :last-child { margin-left: auto; }
+.form-key { font-size: 13px; color: var(--muted); font-weight: 550; word-break: break-word; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-list { display: flex; flex-direction: column; gap: 8px; }
+.form-card { border-radius: 14px; padding: 10px 12px 12px; background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--line); }
+.inspector .form-card { background: var(--surface-3); }
+.form-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.form-card-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.form-card .input { background: var(--surface-2); }
+.form-add { align-self: flex-start; height: 36px; padding: 0 10px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; border-radius: 99px; background: var(--surface-2); font-size: 13px; }
+.form-card .tag { background: var(--surface-2); }
+.tag button { width: 20px; height: 20px; border-radius: 50%; color: var(--muted); line-height: 1; }
+.tag button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.tag-input { flex: 1; min-width: 90px; background: transparent; border: 0; outline: none; padding: 4px 6px; font-size: 13px; color: var(--text); }
+.more-toggle .chev svg { transition: transform .2s; }
+.more-toggle.open .chev svg { transform: rotate(90deg); }

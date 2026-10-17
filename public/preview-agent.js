@@ -4,12 +4,44 @@
 	if (window.parent === window) return;
 	let timer = null;
 
+	// The area a module really draws (texts, icons, images), not its full-width wrapper.
+	const contentRect = (el) => {
+		let x1 = Infinity;
+		let y1 = Infinity;
+		let x2 = -Infinity;
+		let y2 = -Infinity;
+		const add = (r) => {
+			if (r.width <= 0 || r.height <= 0) return;
+			x1 = Math.min(x1, r.left);
+			y1 = Math.min(y1, r.top);
+			x2 = Math.max(x2, r.right);
+			y2 = Math.max(y2, r.bottom);
+		};
+		const range = document.createRange();
+		const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+		for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+			if (n.nodeType === Node.TEXT_NODE) {
+				if (!n.textContent.trim()) continue;
+				range.selectNodeContents(n);
+				add(range.getBoundingClientRect());
+			} else if (!n.firstElementChild && !n.textContent.trim()) {
+				add(n.getBoundingClientRect()); // icons, images, canvases
+			}
+		}
+		const outer = el.getBoundingClientRect();
+		if (x1 === Infinity) return outer;
+		const pad = 8;
+		const left = Math.max(outer.left, x1 - pad);
+		const top = Math.max(outer.top - pad, y1 - pad);
+		return { x: left, y: top, width: Math.min(outer.right, x2 + pad) - left, height: y2 + pad - top };
+	};
+
 	const report = () => {
 		const modules = [];
 		for (const el of document.querySelectorAll(".module")) {
 			const m = /^module_(\d+)_/.exec(el.id);
 			if (!m) continue;
-			const r = el.getBoundingClientRect();
+			const r = contentRect(el);
 			const style = getComputedStyle(el);
 			modules.push({ i: Number(m[1]), x: r.x, y: r.y, w: r.width, h: r.height, hidden: style.display === "none" || style.visibility === "hidden" || el.classList.contains("hidden") });
 		}
