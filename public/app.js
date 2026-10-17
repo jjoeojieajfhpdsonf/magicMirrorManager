@@ -799,7 +799,7 @@ async function addSheet(preset = null, host = null) {
 						}
 					}
 				},
-				h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(name)), moduleLabel(name) !== name ? h("div", { class: "sub" }, name) : null),
+				h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(name))),
 				icon("plus")
 			);
 		const installed = mods ? mods.modules.filter((m) => m.valid).map((m) => m.name) : [];
