@@ -261,6 +261,7 @@ async function discardDraft() {
 }
 
 async function applyDraft() {
+	if (S.state.preview && S.state.preview.health === "frozen" && !(await confirmSheet(t("pending.frozenConfirm"), t("pending.applyAnyway"), true))) return;
 	const job = await guard(() => api("POST", "/api/apply"));
 	if (job) jobSheet(job);
 }
@@ -342,7 +343,11 @@ function refreshMirror() {
 }
 
 function isLive() {
-	return !!(S.state && S.state.preview && S.view === "live" && !LIVE.failed);
+	const p = S.state && S.state.preview;
+	// "pending" only blocks a fresh start (e.g. a reload after the page froze); a preview that
+	// is already showing keeps running while its next version loads
+	const pendingBlocks = p && p.health === "pending" && !(LIVE.box && LIVE.box.isConnected);
+	return !!(p && S.view === "live" && !LIVE.failed && p.health !== "frozen" && !pendingBlocks);
 }
 
 function groupEntries(st) {
@@ -385,7 +390,7 @@ function footEl(st) {
 	return h(
 		"div",
 		{ class: "mirror-foot" },
-		h("div", { class: "hint" }, LIVE.failed && S.view === "live" ? t("mirror.liveFailed") : st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
+		h("div", { class: "hint" }, LIVE.failed && S.view === "live" ? t("mirror.liveFailed") : st.preview && st.preview.health === "pending" && S.view === "live" ? t("mirror.checking") : st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
 		h("button", { class: "btn", onclick: () => (isWide() ? showPanel("add") : addSheet()) }, icon("plus"), t("add.short")),
 		st.preview ? h("button", { class: "icon-btn", "aria-label": liveLabel, title: liveLabel, onclick: toggleView }, icon(S.view === "live" ? "sketch" : "eye")) : null,
 		h("button", { class: "icon-btn", "aria-label": t("mirror.rotate"), title: t("mirror.rotate"), onclick: toggleOrientation }, icon("rotate"))
@@ -405,7 +410,11 @@ function mirrorWrap() {
 	} else {
 		mirror = h("div", { class: `mirror${S.landscape ? " landscape" : ""}` }, MAIN_POSITIONS.filter((p) => known.has(p)).map((p) => regionEl(p, groups[p] || [])));
 	}
-	const wrap = h("div", { class: `mirror-wrap${S.landscape ? " is-landscape" : ""}` }, h("div", { class: "mirror-col" }, mirror, footEl(st)), trayEl(st, groups, live));
+	const frozen = st.preview && st.preview.health === "frozen" && S.view === "live";
+	const warn = frozen ? h("div", { class: "note bad frozen-note" }, t("mirror.frozen")) : null;
+	const wrap = h("div", { class: `mirror-wrap${S.landscape ? " is-landscape" : ""}` }, h("div", { class: "mirror-col" }, warn, mirror, footEl(st)), trayEl(st, groups, live));
+	// while the server finds out whether this draft freezes the preview, look again shortly
+	if (!live && st.preview && st.preview.health === "pending" && S.view === "live") setTimeout(() => refresh({ soft: false }), 6000);
 	setupDrag(wrap);
 	if (live) queueMicrotask(() => updateLive(wrap, true));
 	return wrap;
@@ -996,8 +1005,11 @@ async function entrySheet(index, host = null) {
 		const hint = def ? (def.dynamic ? `${t("entry.default")}: ${t("entry.dynamic")}` : `${t("entry.default")}: ${short(def.value)}`) : "";
 		const label = h("div", { class: "label" }, h("div", { class: "k" }, key), isSet && hint ? h("div", { class: "d" }, hint) : null);
 		const reset = isSet ? h("button", { class: "reset", title: t("entry.reset"), "aria-label": t("entry.reset"), onclick: () => op({ op: "resetOption", key }) }, icon("undo")) : null;
-		const setValue = (value) => {
+		const setValue = async (value) => {
 			if (def && def.simple && value === def.value) return isSet ? op({ op: "resetOption", key }) : undefined;
+			if (typeof value === "number" && def && typeof def.value === "number" && Math.abs(value) > Math.max(100000, Math.abs(def.value) * 1000)) {
+				if (!(await confirmSheet(t("entry.hugeConfirm", { key, value: value.toLocaleString(), def: def.value }), t("entry.setAnyway"), true))) return draw();
+			}
 			return op({ op: "setOption", key, value });
 		};
 		if (type === "boolean") {

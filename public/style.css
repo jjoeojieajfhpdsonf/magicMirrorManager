@@ -485,3 +485,5 @@ select.input.select { appearance: none; -webkit-appearance: none; padding-right:
 	.mirror-foot .hint { display: none; }
 	.mirror-foot { justify-content: flex-end; }
 }
+
+.frozen-note { margin: 0 0 4px; }

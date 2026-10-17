@@ -3,6 +3,7 @@
 (() => {
 	if (window.parent === window) return;
 	let timer = null;
+	let lastAlive = 0;
 
 	// The area a module really draws (texts, icons, images), not its full-width wrapper.
 	const contentRect = (el) => {
@@ -46,6 +47,12 @@
 			modules.push({ i: Number(m[1]), x: r.x, y: r.y, w: r.width, h: r.height, hidden: style.display === "none" || style.visibility === "hidden" || el.classList.contains("hidden") });
 		}
 		window.parent.postMessage({ mmmPreview: "layout", width: innerWidth, height: innerHeight, modules }, "*");
+		// tell the manager's server this draft renders (it remembers drafts that freeze the page)
+		const page = new URLSearchParams(location.search).get("mmm");
+		if (page && modules.length && Date.now() - lastAlive > 3000) {
+			lastAlive = Date.now();
+			fetch(`/__mmm-preview/alive?mmm=${encodeURIComponent(page)}`, { cache: "no-store" }).catch(() => {});
+		}
 	};
 
 	const schedule = () => {

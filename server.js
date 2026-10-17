@@ -100,7 +100,7 @@ function state() {
 		demo: DEMO,
 		auth: auth.enabled,
 		settings: settings(),
-		preview: preview && preview.server ? { port: PREVIEW_PORT } : null,
+		preview: preview && preview.server ? { port: PREVIEW_PORT, health: preview.healthOf(mirror.configHash(w.text)) } : null,
 		rev: mirror.configHash(w.text),
 		mm: { dir: mirror.dir, version: mirror.version(), configPath: mirror.configPath },
 		positions: mirror.positions(),
