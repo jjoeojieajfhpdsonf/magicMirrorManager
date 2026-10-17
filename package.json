@@ -1,7 +1,7 @@
 {
 	"name": "magicmirror-manager",
 	"version": "0.1.0",
-	"description": "A safe, simple web app to manage MagicMirror² modules: layout, settings, install, update – with automatic backup and rollback.",
+	"description": "A safe, simple web app to manage MagicMirror\u00b2 modules: layout, settings, install, update \u2013 with automatic backup and rollback.",
 	"main": "server.js",
 	"scripts": {
 		"start": "node server.js",
@@ -11,6 +11,17 @@
 	"engines": {
 		"node": ">=22"
 	},
-	"keywords": ["magicmirror", "magicmirror2", "modules", "manager", "config"],
-	"license": "MIT"
+	"keywords": [
+		"magicmirror",
+		"magicmirror2",
+		"modules",
+		"manager",
+		"config"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/jjoeojieajfhpdsonf/magicMirrorManager.git"
+	},
+	"homepage": "https://github.com/jjoeojieajfhpdsonf/magicMirrorManager"
 }

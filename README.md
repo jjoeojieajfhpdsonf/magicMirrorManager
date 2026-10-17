@@ -56,7 +56,7 @@ Run this on the Raspberry Pi as the user that runs MagicMirror:
 
 ```bash
 cd ~
-git clone https://github.com/<you>/magicmirror-manager.git
+git clone https://github.com/jjoeojieajfhpdsonf/magicMirrorManager.git magicmirror-manager
 cd magicmirror-manager
 sh tools/install.sh
 ```
