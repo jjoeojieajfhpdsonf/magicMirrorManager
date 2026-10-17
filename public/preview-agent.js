@@ -28,6 +28,30 @@
 		schedule();
 	};
 
+	// Instant feedback from the manager while the page with the new config loads.
+	const moduleEl = (id) => document.querySelector(`[id^="module_${id}_"]`);
+	addEventListener("message", (ev) => {
+		const d = ev.data;
+		if (ev.source !== window.parent || !d || typeof d.mmmPreview !== "string") return;
+		const el = moduleEl(d.id);
+		if (!el) return;
+		if (d.mmmPreview === "hide") el.style.display = d.hidden ? "none" : "";
+		if (d.mmmPreview === "move") {
+			if (!d.position) {
+				el.style.display = "none";
+				return;
+			}
+			const box = document.querySelector(`.region.${d.position.split("_").join(".")} > .container`);
+			if (!box) return;
+			const before = d.before !== null ? moduleEl(d.before) : null;
+			if (before && before.parentElement === box) box.insertBefore(el, before);
+			else box.appendChild(el);
+			box.classList.remove("hidden");
+			el.style.display = "";
+		}
+		schedule();
+	});
+
 	if (document.body) start();
 	else addEventListener("DOMContentLoaded", start);
 })();

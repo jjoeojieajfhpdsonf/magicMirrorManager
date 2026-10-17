@@ -108,7 +108,8 @@ const isWide = () => wideQuery.matches;
 wideQuery.addEventListener("change", () => render());
 
 // Called after every edit of the draft.
-function applied(res) {
+function applied(res, sent) {
+	remapLive(sent, res);
 	S.state = res;
 	renderPending();
 	refreshMirror();
@@ -135,6 +136,9 @@ async function loadModules() {
 async function loadStatus() {
 	const st = await api("GET", "/api/status").catch(() => null);
 	S.status = st;
+	const startup = st && st.http ? st.http.startup : null;
+	if (startup && LIVE.startup && startup !== LIVE.startup && isLive()) reloadPreview();
+	if (startup) LIVE.startup = startup;
 	renderTabs();
 	if (S.tab === "system" && !document.querySelector(".sheet")) renderView();
 }
@@ -349,6 +353,8 @@ function trayEl(st, groups, live) {
 	const rows = ["fullscreen_above", "fullscreen_below"].filter((p) => known.has(p)).map((p) => regionEl(p, pick(groups[p] || []), "tray-region"));
 	rows.push(regionEl("", pick(groups[""] || []), "tray-region"));
 	if (live) {
+		// filled by drawHits() once the preview has drawn its modules
+		rows.push(h("div", { class: "region tray-region static hidden-row empty" }, h("div", { class: "tray-label" }, t("mirror.notVisible"))));
 		const off = st.entries.filter((e) => e.module && e.disabled);
 		if (off.length) rows.push(h("div", { class: "region tray-region static" }, h("div", { class: "tray-label" }, t("mirror.off")), off.map(chip)));
 	}
@@ -374,7 +380,7 @@ function mirrorWrap() {
 	const live = isLive();
 	let mirror;
 	if (live) {
-		// Regions are only drop targets here (and hold modules the preview doesn't draw yet).
+		// Regions are only drop targets here.
 		const regions = h("div", { class: "live-regions" }, MAIN_POSITIONS.filter((p) => known.has(p)).map((p) => regionEl(p, [])));
 		mirror = h("div", { class: `mirror live${S.landscape ? " landscape" : ""}` }, liveFrame(), regions, h("div", { class: "live-hits" }));
 	} else {
@@ -388,7 +394,7 @@ function mirrorWrap() {
 
 // ---------- live preview ----------
 
-const LIVE = { box: null, cur: null, next: null, rev: null, layout: null, failed: false, timer: null, observer: null, scale: 1 };
+const LIVE = { box: null, cur: null, next: null, rev: null, layout: null, ready: false, started: 0, failed: false, timer: null, observer: null, scale: 1 };
 
 function previewSize() {
 	return S.landscape ? { w: 1920, h: 1080 } : { w: 1080, h: 1920 };
@@ -396,7 +402,9 @@ function previewSize() {
 
 function previewUrl() {
 	const p = S.state.preview;
-	return `${location.protocol}//${location.hostname}:${p.port}${p.path || "/"}`;
+	// every page gets its own id, so the proxy can cut off pages from before a restart
+	const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+	return `${location.protocol}//${location.hostname}:${p.port}${p.path || "/"}?mmm=${id}`;
 }
 
 function makeFrame() {
@@ -405,13 +413,55 @@ function makeFrame() {
 	fr.style.width = `${w}px`;
 	fr.style.height = `${ht}px`;
 	fr.style.transform = `scale(${LIVE.scale})`;
+	fr.map = loadedIndexes(S.state);
 	return fr;
 }
 
+// MagicMirror numbers the modules that have a valid (or no) position: module_<n>_<name>.
+// map[n] is the config entry drawn as module n in that frame.
+function loadedIndexes(st) {
+	const known = new Set(st.positions);
+	return st.entries.filter((e) => e.module && (!e.position || known.has(e.position))).map((e) => e.index);
+}
+
+// Edits that shift entries also shift the numbering of the frames already loaded.
+function remapLive(sent, res) {
+	if (!sent) return;
+	let fn = null;
+	if (sent.op === "move" && typeof res.index === "number") {
+		const from = sent.index;
+		const to = res.index;
+		fn = (v) => {
+			if (v === from) return to;
+			const x = v - (v > from ? 1 : 0);
+			return x + (x >= to ? 1 : 0);
+		};
+	} else if (sent.op === "remove") {
+		fn = (v) => (v === sent.index ? null : v > sent.index ? v - 1 : v);
+	} else if (sent.op === "duplicate") {
+		fn = (v) => (v > sent.index ? v + 1 : v);
+	}
+	if (!fn) return;
+	for (const fr of [LIVE.cur, LIVE.next]) if (fr && fr.map) fr.map = fr.map.map((v) => (v === null ? null : fn(v)));
+}
+
+// Instant feedback: move or hide the module inside the preview that is already shown,
+// while the page with the new config loads in the background.
+function previewTell(msg, entryIndex, beforeIndex = null) {
+	const fr = LIVE.cur;
+	if (!isLive() || !fr || !fr.map || !fr.contentWindow) return;
+	const id = fr.map.indexOf(entryIndex);
+	if (id < 0) return;
+	const before = beforeIndex === null || beforeIndex === undefined ? -1 : fr.map.indexOf(beforeIndex);
+	fr.contentWindow.postMessage({ ...msg, mmmPreview: msg.type, id, before: before >= 0 ? before : null }, "*");
+}
+
 function liveFrame() {
-	LIVE.box = h("div", { class: "live-frame" });
+	LIVE.box = h("div", { class: "live-frame" }, h("div", { class: "live-loading" }, h("span", { class: "spinner" }), t("mirror.loading")));
 	LIVE.next = null;
 	LIVE.layout = null;
+	LIVE.ready = false;
+	LIVE.started = Date.now();
 	LIVE.rev = S.state.rev;
 	LIVE.cur = makeFrame();
 	LIVE.box.append(LIVE.cur);
@@ -423,16 +473,16 @@ function liveFrame() {
 function watchFirstLayout(frame) {
 	clearTimeout(LIVE.timer);
 	LIVE.timer = setTimeout(() => {
-		if (frame !== LIVE.cur || LIVE.layout) return;
+		if (frame !== LIVE.cur || LIVE.ready) return;
 		LIVE.failed = true;
 		const old = document.querySelector("#view .mirror-wrap");
 		if (old) old.replaceWith(mirrorWrap());
-	}, 15000);
+	}, 30000);
 }
 
 // Loads the changed config in a hidden second frame and swaps once it has drawn its modules.
 function reloadPreview() {
-	if (!LIVE.box) return;
+	if (!LIVE.box || !LIVE.box.isConnected) return;
 	if (LIVE.next) LIVE.next.remove();
 	const fr = makeFrame();
 	fr.classList.add("next");
@@ -446,6 +496,7 @@ function swapPreview(fr) {
 	fr.classList.remove("next");
 	LIVE.cur = fr;
 	LIVE.next = null;
+	LIVE.layout = null;
 }
 
 function scalePreview(wrap) {
@@ -492,25 +543,35 @@ function updateLive(wrap, first = false) {
 // Click and drag targets on top of the modules the preview draws.
 function drawHits(wrap) {
 	const layer = wrap.querySelector(".live-hits");
-	const regions = wrap.querySelector(".live-regions");
-	if (!layer || !regions) return;
+	const hiddenRow = wrap.querySelector(".hidden-row");
+	if (!layer) return;
+	if (!LIVE.ready) {
+		fill(layer);
+		return;
+	}
 	const st = S.state;
 	const known = new Set(st.positions);
-	// MagicMirror numbers the modules that have a valid (or no) position.
-	const loaded = st.entries.filter((e) => e.module && (!e.position || known.has(e.position)));
+	const map = (LIVE.cur && LIVE.cur.map) || [];
 	const rects = new Map();
+	// Modules fade out for a moment when they change content (e.g. compliments). Keep their
+	// last place for a few seconds instead of treating them as "not visible".
+	const seen = LIVE.cur ? (LIVE.cur.seen = LIVE.cur.seen || new Map()) : new Map();
+	const now = Date.now();
 	for (const m of (LIVE.layout && LIVE.layout.modules) || []) {
-		const e = loaded[m.i];
-		if (e && !m.hidden && m.w > 0 && m.h > 0) rects.set(e.index, m);
+		if (!m.hidden && m.w > 0 && m.h > 0) seen.set(m.i, { rect: m, at: now });
+	}
+	for (const [i, v] of seen) {
+		const e = st.entries[map[i]];
+		if (e && now - v.at < 5000) rects.set(e.index, v.rect);
 	}
 	const sc = LIVE.scale || 1;
 	const hits = [];
-	const missing = {};
+	const missing = [];
 	for (const e of st.entries) {
 		if (!e.module || e.disabled || !e.position || !MAIN_POSITIONS.includes(e.position)) continue;
 		const r = rects.get(e.index);
 		if (!r) {
-			(missing[e.position] = missing[e.position] || []).push(e);
+			missing.push(e);
 			continue;
 		}
 		const hit = h("button", { class: `hit${isWide() && S.selected === e.index ? " sel" : ""}`, "data-index": e.index, "data-pos": e.position, "aria-label": moduleLabel(e.module) }, h("span", { class: "tag" }, moduleLabel(e.module)));
@@ -521,22 +582,32 @@ function drawHits(wrap) {
 		hits.push(hit);
 	}
 	fill(layer, hits);
-	// modules the preview doesn't draw (yet) stay reachable as chips in their region
-	for (const reg of regions.querySelectorAll(".region")) {
-		const items = missing[reg.dataset.pos] || [];
-		fill(reg, items.map(chip));
-		reg.classList.toggle("empty", !items.length);
+	// modules that draw nothing right now (e.g. update notification) stay reachable next to the mirror
+	if (hiddenRow) {
+		fill(hiddenRow, h("div", { class: "tray-label" }, t("mirror.notVisible")), missing.map(chip));
+		hiddenRow.classList.toggle("empty", !missing.length);
 	}
+}
+
+function setReady() {
+	LIVE.ready = true;
+	if (LIVE.box) LIVE.box.classList.add("ready");
 }
 
 window.addEventListener("message", (ev) => {
 	const d = ev.data;
 	if (!d || d.mmmPreview !== "layout") return;
 	if (LIVE.next && ev.source === LIVE.next.contentWindow) {
-		if (!d.modules.length) return;
-		swapPreview(LIVE.next);
+		const fr = LIVE.next;
+		if (d.modules.length && !fr.settling) {
+			fr.settling = true;
+			setTimeout(() => fr === LIVE.next && swapPreview(fr), 1500);
+		}
+		return;
 	} else if (!LIVE.cur || ev.source !== LIVE.cur.contentWindow) return;
 	LIVE.layout = d;
+	// The first reports come before MagicMirror has created its modules.
+	if (!LIVE.ready && (d.modules.length || Date.now() - LIVE.started > 8000)) setReady();
 	const wrap = document.querySelector("#view .mirror-wrap");
 	if (wrap && !wrap.classList.contains("dragging")) drawHits(wrap);
 });
@@ -635,6 +706,7 @@ function setupDrag(root) {
 		if (!commit || !d.target) return;
 		const e = S.state.entries[d.index];
 		if (d.target.before === d.index) return;
+		previewTell({ type: "move", position: d.target.position }, d.index, d.target.before);
 		const res = await guard(() => api("POST", "/api/op", { op: "move", index: d.index, module: e.module, position: d.target.position, before: d.target.before }));
 		if (!res) return;
 		const sel = S.selected;
@@ -646,7 +718,7 @@ function setupDrag(root) {
 				S.selected = x;
 			}
 		}
-		applied(res);
+		applied(res, { op: "move", index: d.index });
 		if (isWide() && S.selected === res.index) fillInspector();
 	};
 
@@ -803,14 +875,17 @@ async function entrySheet(index, host = null) {
 	}
 
 	async function op(body, { reload = true } = {}) {
-		const res = await guard(() => api("POST", "/api/op", { index: idx, module: d.module, ...body }));
+		const sent = { index: idx, module: d.module, ...body };
+		if (body.op === "move") previewTell({ type: "move", position: body.position || null }, idx);
+		if (body.op === "toggle") previewTell({ type: "hide", hidden: body.disabled }, idx);
+		const res = await guard(() => api("POST", "/api/op", sent));
 		if (!res) return false;
 		if (typeof res.index === "number") idx = res.index;
 		if (host) {
 			S.selected = idx;
 			S.panel = "entry";
 		}
-		applied(res);
+		applied(res, sent);
 		if (reload) await load();
 		return true;
 	}
@@ -1130,6 +1205,7 @@ function jobSheet(job, { onDone } = {}) {
 		if (j.status === "running") timer = setTimeout(poll, 700);
 		else {
 			refresh();
+			loadStatus();
 			if (onDone) onDone(j);
 		}
 	};
@@ -1523,6 +1599,7 @@ async function restartMirror() {
 		}
 		S.restarting = null;
 		if (j.status === "done") toast(t("system.restarted"));
+		if (isLive()) reloadPreview();
 		else S.restartError = (j.result && j.result.reason) || j.error || t("job.failed");
 		await loadStatus();
 		redraw();
