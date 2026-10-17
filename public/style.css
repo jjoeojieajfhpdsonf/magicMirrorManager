@@ -494,3 +494,12 @@ select.input.select { appearance: none; -webkit-appearance: none; padding-right:
 @media (min-width: 760px) {
 	.sheet.confirm { width: 460px; }
 }
+
+/* dates and seasonal suggestions */
+.date-select { display: flex; gap: 6px; }
+.date-select select.input.select { max-width: none; }
+.date-day { width: 64px; }
+.date-month { width: 130px; }
+.season { margin-bottom: 10px; }
+.season-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 16px 4px; }
+.season-head .title { font-weight: 650; }

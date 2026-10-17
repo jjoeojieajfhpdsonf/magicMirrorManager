@@ -7,6 +7,7 @@ A small web app to manage the modules of a [MagicMirror²](https://magicmirror.b
 - **Find and install** modules from the [official module list](https://modules.magicmirror.builders/).
 - **Update** modules (checked automatically every 6 hours), see what changed, and undo an update with one tap. Uninstalled modules go to a trash you can restore from.
 - **Update MagicMirror itself**, with the same safety net.
+- **Seasonal modules:** suggestions for Halloween, Christmas, winter, New Year and more when the time comes, and a yearly date window per module ("show only from 15 Oct until 1 Nov"). The manager switches such modules on and off by itself, with the usual check and rollback.
 - **Undo** any change from the history.
 
 <p align="center">

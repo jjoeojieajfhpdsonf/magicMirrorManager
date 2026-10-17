@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Seasonal suggestions in the modules tab (Halloween, Christmas, winter, New Year's Eve, Valentine's Day, Easter): modules already installed, and matching ones from the official list.
+- Date windows per module: `showBetween: ["10-15", "11-01"]` next to the module in `config.js`; the manager switches it on and off every year (checked hourly, applied with check and rollback).
+- Guard against settings that freeze the mirror: huge numbers ask first; a draft whose preview hangs is remembered, shown as a sketch with a warning and applying asks first.
+
 ## 0.9.0 – 2026-10-17
 
 First public version.

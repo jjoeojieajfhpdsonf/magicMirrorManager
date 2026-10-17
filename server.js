@@ -21,6 +21,7 @@ const { setupDemo } = require("./lib/demo");
 const { Preview } = require("./lib/preview");
 const { Auth } = require("./lib/auth");
 const { Core } = require("./lib/core");
+const seasons = require("./lib/seasons");
 
 const PORT = Number(process.env.PORT) || 8090;
 const PREVIEW_PORT = process.env.PREVIEW_PORT === "0" ? 0 : Number(process.env.PREVIEW_PORT) || PORT + 1;
@@ -372,6 +373,12 @@ route("POST", "/api/modules/install", (body) => {
 			const w = working();
 			const { text, change } = C.ops.add(w.text, { module: result.name, position: body.position || null });
 			saveWorking(w, text, change);
+			if (body.schedule && Array.isArray(body.schedule)) {
+				const w2 = working();
+				const index = C.listEntries(w2.text).length - 1;
+				const r = C.ops.setSchedule(w2.text, { index, module: result.name, from: body.schedule[0], until: body.schedule[1] });
+				saveWorking(w2, r.text, r.change);
+			}
 			result.addedToDraft = true;
 		}
 		return result;
@@ -395,6 +402,34 @@ route("POST", "/api/mm/update", () => {
 	return jobs.start("mmUpdate", "MagicMirror", core.steps(), (api) => core.update(api, { restartAndVerify }));
 });
 
+// Seasonal suggestions: modules for events that are on now or coming up soon.
+route("GET", "/api/suggestions", async () => {
+	const events = seasons.upcoming();
+	if (!events.length) return { events: [] };
+	const cat = await catalog.get();
+	const w = working();
+	let entries = [];
+	try {
+		entries = C.listEntries(w.text);
+	} catch {
+		// config can't be parsed
+	}
+	const installedNames = modules.installedNames();
+	return {
+		events: events
+			.map((ev) => {
+				const used = entries.filter((e) => e.module && seasons.matches(e.module, ev.keywords));
+				const idle = installedNames.filter((n) => seasons.matches(n, ev.keywords) && !used.some((e) => e.module === n));
+				const found = cat.modules
+					.filter((m) => !m.archived && !installedNames.includes(m.name) && seasons.matches(`${m.name} ${m.description || ""} ${(m.tags || []).join(" ")}`, ev.keywords))
+					.sort((a, b) => b.stars - a.stars)
+					.slice(0, 5);
+				return { ...ev, used, idle, catalog: found };
+			})
+			.filter((ev) => ev.used.length || ev.idle.length || ev.catalog.length)
+	};
+});
+
 route("GET", "/api/catalog", async (body, p, query) => catalog.get({ refresh: query.get("refresh") === "1" }));
 
 function isActive(name) {
@@ -404,6 +439,57 @@ function isActive(name) {
 		return true;
 	}
 }
+
+// ---------- date windows: switch modules on and off (checked every hour) ----------
+
+let lastScheduleTry = null;
+function runSchedules() {
+	if (jobs.busy()) return;
+	let current;
+	let entries;
+	try {
+		current = mirror.readConfig();
+		entries = C.listEntries(current);
+	} catch {
+		return;
+	}
+	const today = new Date();
+	// a module that is off inside its window, or on outside of it
+	const due = entries.filter((e) => e.schedule && e.disabled === seasons.inWindow(today, e.schedule[0], e.schedule[1]));
+	if (!due.length) return;
+	// one try per day and situation, so a failing change isn't retried every hour
+	const key = `${today.toDateString()} ${due.map((e) => `${e.index}:${e.disabled}`).join(",")}`;
+	if (lastScheduleTry === key) return;
+	lastScheduleTry = key;
+	let text = current;
+	const changes = [];
+	for (const e of due) {
+		const r = C.ops.toggle(text, { index: e.index, module: e.module, disabled: !e.disabled });
+		text = r.text;
+		changes.push(r.change);
+	}
+	const draft = store.getDraft();
+	const baseBefore = mirror.configHash(current);
+	jobs.start("schedule", "schedule", APPLY_STEPS, async (api) => {
+		const result = await applyConfig(api, text, { kind: "schedule", changes });
+		// carry pending changes over to the new config
+		if (result.status === "done" && draft && draft.base === baseBefore) {
+			let dt = draft.text;
+			try {
+				for (const e of due) {
+					const d = C.listEntries(dt).find((x) => x.module === e.module && x.schedule && x.schedule.join() === e.schedule.join());
+					if (d) dt = C.ops.toggle(dt, { index: d.index, module: d.module, disabled: !e.disabled }).text;
+				}
+				store.saveDraft({ ...draft, base: mirror.configHash(text), text: dt });
+			} catch {
+				// leave the draft; it will show as conflicting
+			}
+		}
+		return result;
+	});
+}
+setTimeout(runSchedules, 30 * 1000).unref();
+setInterval(runSchedules, 60 * 60 * 1000).unref();
 
 // ---------- automatic update checks ----------
 

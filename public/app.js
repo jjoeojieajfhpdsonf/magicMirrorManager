@@ -171,6 +171,8 @@ function changeText(c) {
 	const p = { ...c.p };
 	if (p.m) p.m = moduleLabel(p.m);
 	if ("pos" in p) p.pos = posLabel(p.pos);
+	if (p.from) p.from = dayLabel(p.from);
+	if (p.until) p.until = dayLabel(p.until);
 	return t(c.k, p);
 }
 
@@ -275,7 +277,8 @@ function chip(e) {
 	if (e.disabled) cls.push("off");
 	if (!e.installed && !e.disabled) cls.push("missing");
 	if (isWide() && S.selected === e.index) cls.push("sel");
-	return h("button", { class: cls.join(" "), "data-index": e.index, title: e.module }, moduleLabel(e.module), e.header ? h("small", {}, e.header) : !e.installed && !e.disabled ? h("small", {}, t("mirror.notInstalled")) : null);
+	const sub = e.disabled && e.schedule ? t("schedule.from", { d: dayLabel(e.schedule[0]) }) : e.header ? e.header : !e.installed && !e.disabled ? t("mirror.notInstalled") : null;
+	return h("button", { class: cls.join(" "), "data-index": e.index, title: e.module }, moduleLabel(e.module), sub ? h("small", {}, sub) : null);
 }
 
 function mirrorView() {
@@ -941,6 +944,7 @@ async function entrySheet(index, host = null) {
 		parts.push(h("div", { class: "section-title" }, t("entry.header")));
 		parts.push(h("div", { class: "card" }, h("div", { class: "field" }, h("input", { class: "input wide", value: d.header, placeholder: t("entry.headerPh"), onchange: (e) => op({ op: "setHeader", header: e.target.value }) }))));
 
+		parts.push(scheduleSection());
 		parts.push(settingsSection());
 
 		const info = d.info || {};
@@ -957,6 +961,23 @@ async function entrySheet(index, host = null) {
 		const scroll = s.body.scrollTop;
 		fill(s.body, ...parts);
 		s.body.scrollTop = scroll;
+	}
+
+	// "Show only from … until …" every year
+	function scheduleSection() {
+		const wrap = h("div");
+		wrap.append(h("div", { class: "section-title" }, t("schedule.title")));
+		const on = !!d.schedule;
+		const sw = h("label", { class: "switch" }, h("input", { type: "checkbox", checked: on, onchange: (e) => (e.target.checked ? op({ op: "setSchedule", from: "12-01", until: "02-28" }) : op({ op: "clearSchedule" })) }), h("span"));
+		const card = h("div", { class: "card" }, h("div", { class: "field" }, h("div", { class: "label" }, h("div", { class: "k" }, t("schedule.only")), on ? null : h("div", { class: "d" }, t("schedule.hint"))), sw));
+		if (on) {
+			const [from, until] = d.schedule;
+			const save = (f, u) => op({ op: "setSchedule", from: f, until: u });
+			card.append(h("div", { class: "field" }, h("div", { class: "label" }, h("div", { class: "k" }, t("schedule.fromLabel"))), dateSelect(from, (v) => save(v, until))));
+			card.append(h("div", { class: "field" }, h("div", { class: "label" }, h("div", { class: "k" }, t("schedule.untilLabel"))), dateSelect(until, (v) => save(from, v))));
+		}
+		wrap.append(card);
+		return wrap;
 	}
 
 	function settingsSection() {
@@ -1327,6 +1348,7 @@ function modulesView() {
 		h("button", { class: "btn primary block", style: "margin-top:4px", onclick: () => catalogSheet() }, icon("plus"), t("modules.find"))
 	);
 	if (!m) return wrap;
+	wrap.append(seasonSection());
 	const withUpdate = m.modules.filter((x) => x.update && x.update.behind > 0);
 	wrap.append(
 		h(
@@ -1366,6 +1388,58 @@ function moduleRow(m) {
 		pills,
 		h("span", { class: "chev", html: ICONS.chev })
 	);
+}
+
+// "Fits the season": events on now or soon, with installed and new modules for them.
+function seasonSection() {
+	const box = h("div");
+	api("GET", "/api/suggestions")
+		.then((r) => {
+			if (!r.events.length) return;
+			const rows = [];
+			for (const ev of r.events) {
+				const range = `${dayLabel(ev.from)} – ${dayLabel(ev.until)}`;
+				const head = h("div", { class: "season-head" }, h("span", { class: "title" }, t(`season.${ev.id}`)), h("span", { class: "sub small muted" }, ev.active ? range : t("season.soon", { n: ev.inDays, range })));
+				const items = [];
+				// on the mirror already: offer the window (or show it)
+				for (const e of ev.used) {
+					const scheduled = e.schedule && e.schedule.join() === [ev.from, ev.until].join();
+					items.push(h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(e.module)), h("div", { class: "sub" }, scheduled ? t("season.scheduled", { range }) : e.disabled ? t("season.off") : t("modules.used"))),
+						scheduled ? null : h("button", { class: "btn", onclick: async () => {
+							const res = await guard(() => api("POST", "/api/op", { op: "setSchedule", index: e.index, module: e.module, from: ev.from, until: ev.until }));
+							if (res) {
+								S.state = res;
+								renderPending();
+								toast(t("season.done", { m: moduleLabel(e.module), range }));
+								renderView();
+							}
+						} }, t("season.setWindow"))));
+				}
+				// installed, but not on the mirror
+				for (const name of ev.idle) {
+					items.push(h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(name)), h("div", { class: "sub" }, t("modules.unused"))),
+						h("button", { class: "btn", onclick: async () => {
+							let res = await guard(() => api("POST", "/api/op", { op: "add", module: name, position: "fullscreen_above" }));
+							if (!res) return;
+							res = await guard(() => api("POST", "/api/op", { op: "setSchedule", index: res.entries.length - 1, module: name, from: ev.from, until: ev.until }));
+							if (res) {
+								S.state = res;
+								renderPending();
+								toast(t("season.done", { m: moduleLabel(name), range }));
+								renderView();
+							}
+						} }, t("season.add"))));
+				}
+				// from the official list
+				for (const c of ev.catalog) {
+					items.push(h("button", { class: "row", onclick: () => catalogDetail(c, false, null, { schedule: [ev.from, ev.until], label: t(`season.${ev.id}`) }) }, thumb(c.name, c.image), h("div", { class: "grow" }, h("div", { class: "title" }, c.name), h("div", { class: "sub" }, c.description || "")), h("span", { class: "small muted" }, `★ ${c.stars}`)));
+				}
+				rows.push(h("div", { class: "card season" }, head, items));
+			}
+			fill(box, h("div", { class: "section-title" }, t("season.title")), rows);
+		})
+		.catch(() => {});
+	return box;
 }
 
 // Uninstalled modules wait in the manager's trash (the last 10).
@@ -1559,15 +1633,16 @@ async function catalogSheet() {
 	drawList();
 }
 
-function catalogDetail(m, isInstalled, parent) {
+function catalogDetail(m, isInstalled, parent, season = null) {
 	const s = openSheet();
 	s.setHead(m.name, m.maintainer);
-	let pos = null;
+	let pos = season ? "fullscreen_above" : null;
+	let useSchedule = !!season;
 	const draw = () => {
 		const parts = [];
 		if (m.image) {
 			const hero = h("div", { class: "hero" });
-			hero.style.backgroundImage = `url("${S.catalog.imageBase}${encodeURIComponent(m.image)}")`;
+			hero.style.backgroundImage = `url("${(S.catalog && S.catalog.imageBase) || "https://modules.magicmirror.builders/images/"}${encodeURIComponent(m.image)}")`;
 			parts.push(hero);
 		}
 		parts.push(h("div", { style: "margin:0 4px" }, m.description || ""));
@@ -1579,15 +1654,18 @@ function catalogDetail(m, isInstalled, parent) {
 		if (!isInstalled) {
 			parts.push(h("div", { class: "section-title" }, t("catalog.where")));
 			parts.push(picker(pos, (p) => { pos = p; draw(); }));
+			if (season) {
+				parts.push(h("div", { class: "card", style: "margin-top:12px" }, h("div", { class: "field" }, h("div", { class: "label" }, h("div", { class: "k" }, t("schedule.only")), h("div", { class: "d" }, `${season.label}: ${dayLabel(season.schedule[0])} – ${dayLabel(season.schedule[1])}`)), h("label", { class: "switch" }, h("input", { type: "checkbox", checked: useSchedule, onchange: (e) => (useSchedule = e.target.checked) }), h("span")))));
+			}
 			parts.push(
 				h("button", {
 					class: "btn primary block",
 					style: "margin-top:14px",
 					onclick: async () => {
-						const job = await guard(() => api("POST", "/api/modules/install", { id: m.id, position: pos }));
+						const job = await guard(() => api("POST", "/api/modules/install", { id: m.id, position: pos, schedule: season && useSchedule ? season.schedule : null }));
 						if (job) {
 							s.close();
-							parent.close();
+							if (parent) parent.close();
 							jobSheet(job);
 						}
 					}
@@ -1779,6 +1857,23 @@ async function configSheet() {
 			}, t("system.configCheck"))
 		)
 	);
+}
+
+// "12-01" -> "1. Dez." / "Dec 1"
+function dayLabel(mmdd) {
+	const [m, d] = mmdd.split("-").map(Number);
+	return new Date(2000, m - 1, d).toLocaleDateString(LANG === "de" ? "de-CH" : "en-GB", { day: "numeric", month: "short" });
+}
+
+// Day and month pickers for a yearly date ("MM-DD").
+function dateSelect(mmdd, onChange) {
+	const [m, d] = mmdd.split("-").map(Number);
+	const day = h("select", { class: "input select date-day" }, Array.from({ length: 31 }, (_, i) => h("option", { value: i + 1, selected: i + 1 === d }, String(i + 1))));
+	const month = h("select", { class: "input select date-month" }, Array.from({ length: 12 }, (_, i) => h("option", { value: i + 1, selected: i + 1 === m }, new Date(2000, i, 1).toLocaleDateString(LANG === "de" ? "de-CH" : "en-GB", { month: "long" }))));
+	const change = () => onChange(`${String(month.value).padStart(2, "0")}-${String(day.value).padStart(2, "0")}`);
+	day.addEventListener("change", change);
+	month.addEventListener("change", change);
+	return h("div", { class: "date-select" }, day, month);
 }
 
 // Value typed into "custom setting": true/false, numbers, JSON lists/objects, else text.
