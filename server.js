@@ -16,7 +16,7 @@ const C = require("./lib/config");
 const { diffLines } = require("./lib/diff");
 const { readDefaults } = require("./lib/defaults");
 const { UserError } = require("./lib/errors");
-const { writeAtomic } = require("./lib/util");
+const { writeAtomic, readJSON, writeJSON } = require("./lib/util");
 const { setupDemo } = require("./lib/demo");
 
 const PORT = Number(process.env.PORT) || 8090;
@@ -44,6 +44,11 @@ const store = new Store(DATA_DIR);
 const jobs = new Jobs();
 const modules = new Modules(mirror, DATA_DIR);
 const catalog = new Catalog(DATA_DIR);
+
+// ---------- manager settings (shared by all devices) ----------
+
+const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
+const settings = () => ({ orientation: "portrait", ...readJSON(SETTINGS_FILE, {}) });
 
 // ---------- working copy: the draft if there is one, otherwise config.js ----------
 
@@ -87,6 +92,7 @@ function state() {
 		ok: true,
 		version: VERSION,
 		demo: DEMO,
+		settings: settings(),
 		mm: { dir: mirror.dir, version: mirror.version(), configPath: mirror.configPath },
 		positions: mirror.positions(),
 		builtins: mirror.builtinModules(),
@@ -236,6 +242,13 @@ route("POST", "/api/op", (body) => {
 	const { text, change, index } = op(w.text, body);
 	saveWorking(w, text, change);
 	return { ...state(), index: index !== undefined ? index : body.index };
+});
+
+route("POST", "/api/settings", (body) => {
+	const next = settings();
+	if (body.orientation === "portrait" || body.orientation === "landscape") next.orientation = body.orientation;
+	writeJSON(SETTINGS_FILE, next);
+	return next;
 });
 
 route("POST", "/api/draft/discard", () => {

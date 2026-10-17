@@ -93,7 +93,7 @@ const S = {
 	modules: null,
 	catalog: null,
 	status: null,
-	landscape: store("landscape") === "1",
+	landscape: false,
 	logsOpen: false
 };
 
@@ -113,7 +113,10 @@ function applied(res) {
 
 async function refresh() {
 	const st = await guard(() => api("GET", "/api/state"));
-	if (st) S.state = st;
+	if (st) {
+		S.state = st;
+		if (st.settings) S.landscape = st.settings.orientation === "landscape";
+	}
 	render();
 }
 
@@ -301,22 +304,21 @@ function mirrorWrap() {
 
 	const mirror = h("div", { class: `mirror${S.landscape ? " landscape" : ""}` }, MAIN_POSITIONS.filter((p) => known.has(p)).map((p) => region(p)));
 	const tray = h("div", { class: "tray" }, ["fullscreen_above", "fullscreen_below"].filter((p) => known.has(p)).map((p) => region(p, "tray-region")), region("", "tray-region"));
-	const wrap = h(
+	const foot = h(
 		"div",
-		{ class: "mirror-wrap" },
-		h("div", { class: "mirror-tools" }, h("button", { class: "icon-btn", "aria-label": t("mirror.rotate"), title: t("mirror.rotate"), onclick: toggleOrientation }, icon("rotate"))),
-		mirror,
-		tray,
-		st.entries.length ? h("div", { class: "hint" }, t("mirror.dragHint")) : h("div", { class: "empty" }, t("mirror.empty"))
+		{ class: "mirror-foot" },
+		h("div", { class: "hint" }, st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
+		h("button", { class: "icon-btn", "aria-label": t("mirror.rotate"), title: t("mirror.rotate"), onclick: toggleOrientation }, icon("rotate"))
 	);
+	const wrap = h("div", { class: `mirror-wrap${S.landscape ? " is-landscape" : ""}` }, h("div", { class: "mirror-col" }, mirror, tray, foot));
 	setupDrag(wrap);
 	return wrap;
 }
 
 function toggleOrientation() {
 	S.landscape = !S.landscape;
-	store("landscape", S.landscape ? "1" : "0");
 	refreshMirror();
+	guard(() => api("POST", "/api/settings", { orientation: S.landscape ? "landscape" : "portrait" }));
 }
 
 // Drag & drop with pointer events: mouse drags right away, touch after a short press.
