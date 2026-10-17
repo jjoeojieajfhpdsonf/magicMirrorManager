@@ -1533,11 +1533,22 @@ async function moduleSheet(name) {
 		"div",
 		{ class: "card", style: "margin-top:18px" },
 		m.remote ? h("a", { class: "row", href: m.remote.replace(/\.git$/, ""), target: "_blank", rel: "noopener" }, h("span", { class: "grow" }, t("modules.repo")), icon("chev")) : null,
-		m.valid ? h("button", { class: "row", onclick: () => { s.close(); addModuleTo(name); } }, h("span", { class: "grow" }, t("modules.addToMirror"))) : null,
+		// already on the mirror: open it there (a second entry: "Duplicate" in its panel)
+		m.used
+			? h("button", { class: "row", onclick: () => { s.close(); openOnMirror(name); } }, h("span", { class: "grow" }, t("modules.editOnMirror")), icon("chev"))
+			: m.valid ? h("button", { class: "row", onclick: () => { s.close(); addModuleTo(name); } }, h("span", { class: "grow" }, t("modules.addToMirror"))) : null,
 		h("button", { class: "row", style: m.used ? "color:var(--faint)" : "color:var(--bad)", onclick: () => uninstall(m, s) }, h("div", { class: "grow" }, h("div", {}, t("modules.uninstall")), m.used ? h("div", { class: "sub" }, t("modules.uninstallHint")) : null))
 	);
 	parts.push(actions);
 	fill(s.body, ...parts);
+}
+
+function openOnMirror(name) {
+	const index = S.state.entries.findIndex((e) => e.module === name);
+	switchTab("mirror");
+	if (index < 0) return;
+	if (isWide()) showPanel("entry", index);
+	else entrySheet(index);
 }
 
 function addModuleTo(name) {

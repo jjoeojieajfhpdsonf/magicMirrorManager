@@ -62,20 +62,56 @@ const settings = () => ({ orientation: "portrait", view: "live", ...readJSON(SET
 function working() {
 	const current = mirror.readConfig();
 	const hash = mirror.configHash(current);
-	const draft = store.getDraft();
+	let draft = store.getDraft();
+	// config.js was changed elsewhere (by hand, another tool): replay the collected steps on it
+	if (draft && draft.base !== hash) draft = rebase(draft, current, hash);
 	if (draft && draft.base === hash && draft.text !== current) return { text: draft.text, current, hash, draft };
 	if (draft && draft.base !== hash) return { text: current, current, hash, draft: null, conflict: draft };
 	return { text: current, current, hash, draft: null };
 }
 
-function saveWorking(w, text, change) {
+// Applies the draft's steps again on the new config. Returns the new draft, or the old one
+// (= conflict) if a step no longer fits, e.g. because its module was removed meanwhile.
+function rebase(draft, current, hash) {
+	if (!Array.isArray(draft.ops) || !draft.ops.length) return draft;
+	let text = current;
+	const ops = [];
+	try {
+		for (const o0 of draft.ops) {
+			const o = { ...o0 };
+			if (typeof o.index === "number") {
+				// the entry may sit elsewhere now: find it by its module name
+				const entries = C.listEntries(text);
+				if (!entries[o.index] || entries[o.index].module !== o.module) {
+					const same = entries.filter((e) => e.module === o.module);
+					if (same.length !== 1) throw new Error("ambiguous");
+					o.index = same[0].index;
+					if (o.op === "move") o.before = null;
+				}
+			}
+			text = C.ops[o.op](text, o).text;
+			ops.push(o);
+		}
+	} catch {
+		return draft;
+	}
+	const next = { ...draft, base: hash, text, ops };
+	if (text === current) store.clearDraft();
+	else store.saveDraft(next);
+	return text === current ? null : next;
+}
+
+// op: the step that led to `text` (kept so it can be replayed); null = not replayable (raw edit)
+function saveWorking(w, text, change, op) {
 	if (text === w.current) {
 		store.clearDraft();
 		return;
 	}
 	const changes = w.draft ? w.draft.changes.slice() : [];
 	if (change) changes.push(change);
-	store.saveDraft({ base: w.hash, text, changes });
+	const prevOps = w.draft ? w.draft.ops : [];
+	const ops = op && Array.isArray(prevOps) ? [...prevOps, op] : null;
+	store.saveDraft({ base: w.hash, text, changes, ops });
 }
 
 function state() {
@@ -251,7 +287,7 @@ route("POST", "/api/op", (body) => {
 	if (!op || typeof op !== "function") throw new UserError("Unknown action");
 	const w = working();
 	const { text, change, index } = op(w.text, body);
-	saveWorking(w, text, change);
+	saveWorking(w, text, change, body);
 	return { ...state(), index: index !== undefined ? index : body.index };
 });
 
@@ -371,13 +407,15 @@ route("POST", "/api/modules/install", (body) => {
 		const result = await modules.install(api, { url, name });
 		if (result.status === "done" && body.addToMirror !== false) {
 			const w = working();
-			const { text, change } = C.ops.add(w.text, { module: result.name, position: body.position || null });
-			saveWorking(w, text, change);
+			const addOp = { op: "add", module: result.name, position: body.position || null };
+			const { text, change } = C.ops.add(w.text, addOp);
+			saveWorking(w, text, change, addOp);
 			if (body.schedule && Array.isArray(body.schedule)) {
 				const w2 = working();
 				const index = C.listEntries(w2.text).length - 1;
-				const r = C.ops.setSchedule(w2.text, { index, module: result.name, from: body.schedule[0], until: body.schedule[1] });
-				saveWorking(w2, r.text, r.change);
+				const schedOp = { op: "setSchedule", index, module: result.name, from: body.schedule[0], until: body.schedule[1] };
+				const r = C.ops.setSchedule(w2.text, schedOp);
+				saveWorking(w2, r.text, r.change, schedOp);
 			}
 			result.addedToDraft = true;
 		}
