@@ -1584,7 +1584,7 @@ async function catalogSheet() {
 	let query = "";
 	let cat = null;
 	let limit = 40;
-	const input = h("input", { type: "search", placeholder: t("catalog.search"), autocapitalize: "off", autocomplete: "off", spellcheck: "false" });
+	const input = h("input", { type: "search", placeholder: t("catalog.searchHint"), autocapitalize: "off", autocomplete: "off", spellcheck: "false" });
 	const cats = h("div", { class: "cats" });
 	const list = h("div");
 	s.body.append(h("div", { class: "search" }, input, cats), list);
@@ -1635,7 +1635,8 @@ async function catalogSheet() {
 		);
 		fill(list, 
 			S.catalog.error ? h("div", { class: "note warn" }, t("catalog.offline")) : null,
-			hits.length ? h("div", { class: "card" }, rows) : h("div", { class: "empty" }, t("catalog.empty")),
+			urlInstallRow(query.trim(), s),
+			hits.length ? h("div", { class: "card" }, rows) : /^https:\/\//i.test(query.trim()) ? null : h("div", { class: "empty" }, t("catalog.empty")),
 			hits.length > limit ? h("button", { class: "btn block ghost", style: "margin-top:8px", onclick: () => { limit += 60; drawList(); } }, t("catalog.more")) : null
 		);
 	};
@@ -1653,6 +1654,21 @@ async function catalogSheet() {
 	drawList();
 }
 
+// A module that isn't in the official list: install it straight from its repository address.
+function urlInstallRow(text, sheet) {
+	const m = /^https:\/\/[\w.-]+(?::\d+)?\/[\w.~-]+\/([\w.~-]+?)(?:\.git)?\/?$/i.exec(text);
+	if (!m) return null;
+	const name = m[1];
+	return h(
+		"div",
+		{ class: "card", style: "margin-bottom:10px" },
+		h("button", { class: "row", onclick: () => catalogDetail({ name, url: text.replace(/\/$/, ""), description: t("catalog.fromUrl"), stars: 0, fromUrl: true }, (S.modules ? S.modules.modules : []).some((x) => x.name === name), sheet) },
+			thumb(name, null),
+			h("div", { class: "grow" }, h("div", { class: "title" }, t("catalog.installUrl", { name })), h("div", { class: "sub" }, text)),
+			icon("chev"))
+	);
+}
+
 function catalogDetail(m, isInstalled, parent, season = null) {
 	const s = openSheet();
 	s.setHead(m.name, m.maintainer);
@@ -1666,7 +1682,7 @@ function catalogDetail(m, isInstalled, parent, season = null) {
 			parts.push(hero);
 		}
 		parts.push(h("div", { style: "margin:0 4px" }, m.description || ""));
-		const meta = h("div", { class: "meta" }, h("span", { class: "pill" }, `★ ${m.stars}`), m.lastCommit ? h("span", { class: "pill" }, t("catalog.updated", { t: ago(m.lastCommit) })) : null, m.license ? h("span", { class: "pill" }, m.license) : null, m.category ? h("span", { class: "pill" }, m.category) : null);
+		const meta = m.fromUrl ? null : h("div", { class: "meta" }, h("span", { class: "pill" }, `★ ${m.stars}`), m.lastCommit ? h("span", { class: "pill" }, t("catalog.updated", { t: ago(m.lastCommit) })) : null, m.license ? h("span", { class: "pill" }, m.license) : null, m.category ? h("span", { class: "pill" }, m.category) : null);
 		parts.push(meta);
 		if (m.archived) parts.push(h("div", { class: "note warn" }, t("catalog.archivedWarn")));
 		else if (m.lastCommit && Date.now() - new Date(m.lastCommit).getTime() > 730 * 86400000) parts.push(h("div", { class: "note warn" }, t("catalog.oldWarn")));
@@ -1682,7 +1698,7 @@ function catalogDetail(m, isInstalled, parent, season = null) {
 					class: "btn primary block",
 					style: "margin-top:14px",
 					onclick: async () => {
-						const job = await guard(() => api("POST", "/api/modules/install", { id: m.id, position: pos, schedule: season && useSchedule ? season.schedule : null }));
+						const job = await guard(() => api("POST", "/api/modules/install", m.fromUrl ? { url: m.url, name: m.name, position: pos } : { id: m.id, position: pos, schedule: season && useSchedule ? season.schedule : null }));
 						if (job) {
 							s.close();
 							if (parent) parent.close();
