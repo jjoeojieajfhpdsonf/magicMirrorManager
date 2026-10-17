@@ -395,6 +395,12 @@ route("GET", "/api/trash", () => ({ items: modules.trash() }));
 
 route("POST", "/api/trash/:id/restore", (body, p) => jobs.start("untrash", p.id.replace(/-\d{4}-.*$/, ""), [{ key: "restore", label: "restore" }], (api) => modules.restoreFromTrash(api, p.id)));
 
+route("POST", "/api/trash/:id/delete", (body, p) => {
+	if (jobs.busy()) throw new UserError("Another action is still running. Please wait until it has finished.");
+	modules.deleteFromTrash(p.id);
+	return { items: modules.trash() };
+});
+
 route("POST", "/api/mm/check", async () => (DEMO ? null : core.check()));
 
 route("POST", "/api/mm/update", () => {

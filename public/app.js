@@ -1448,11 +1448,20 @@ function trashSection() {
 	api("GET", "/api/trash")
 		.then((r) => {
 			if (!r.items.length) return;
+			const when = (s) => {
+				const [d, tm] = s.split("_");
+				return new Date(`${d}T${tm.replace(/-/g, ":")}`).toLocaleString(LANG === "de" ? "de-CH" : "en-GB", { dateStyle: "medium", timeStyle: "short" });
+			};
 			const list = h("div", { class: "card", hidden: true }, r.items.map((it) =>
-				h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(it.name)), h("div", { class: "sub" }, it.time.replace("_", " ").replace(/-(\d\d)-(\d\d)$/, ":$1"))), h("button", { class: "btn", onclick: async () => {
-					const job = await guard(() => api("POST", `/api/trash/${encodeURIComponent(it.id)}/restore`));
-					if (job) jobSheet(job);
-				} }, t("trash.restore")))
+				h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(it.name)), h("div", { class: "sub" }, when(it.time))),
+					h("button", { class: "btn", onclick: async () => {
+						const job = await guard(() => api("POST", `/api/trash/${encodeURIComponent(it.id)}/restore`));
+						if (job) jobSheet(job);
+					} }, t("trash.restore")),
+					h("button", { class: "icon-btn trash-del", title: t("trash.delete"), "aria-label": t("trash.delete"), onclick: async () => {
+						if (!(await confirmSheet(t("trash.deleteConfirm", { name: moduleLabel(it.name) }), t("trash.delete"), true))) return;
+						if (await guard(() => api("POST", `/api/trash/${encodeURIComponent(it.id)}/delete`))) renderView();
+					} }, icon("close")))
 			));
 			const toggle = h("button", { class: "row more-toggle", onclick: () => {
 				list.hidden = !list.hidden;

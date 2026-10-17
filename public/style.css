@@ -503,3 +503,6 @@ select.input.select { appearance: none; -webkit-appearance: none; padding-right:
 .season { margin-bottom: 10px; }
 .season-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 16px 4px; }
 .season-head .title { font-weight: 650; }
+
+.trash-del { background: transparent; color: var(--faint); }
+.trash-del:hover { color: var(--bad); background: var(--bad-soft); }
