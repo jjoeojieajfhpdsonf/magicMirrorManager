@@ -2,10 +2,10 @@
 
 A small web app to manage the modules of a [MagicMirror²](https://magicmirror.builders/), from your phone or laptop, without ever breaking the mirror.
 
-- **Arrange** modules on a sketch of your mirror with drag and drop.
+- **Arrange** modules with drag and drop on a **live preview** of your mirror. The preview already shows your unsaved changes, with real content.
 - **Configure** modules with switches and fields. The default values are read straight from each module's source code.
 - **Find and install** modules from the [official module list](https://modules.magicmirror.builders/).
-- **Update** modules, and see what changed before you update.
+- **Update** modules (checked automatically every 6 hours), and see what changed before you update.
 - **Undo** any change from the history.
 
 It is a single Node.js process with **no dependencies** (no `npm install`), plus a plain JavaScript web app. The interface is available in German and English.
@@ -68,7 +68,7 @@ The script:
 3. saves the pm2 process list so the manager comes back after a reboot,
 4. prints the address to open.
 
-The manager listens on port **8090**: open `http://<your-pi>:8090` and add it to your phone's home screen.
+The manager listens on port **8090**: open `http://<your-pi>:8090` (often `http://magicmirror.local:8090`) and add it to your phone's home screen. The live preview uses the next port (8091).
 
 Update the manager later with:
 
@@ -90,7 +90,22 @@ Everything has sensible defaults. Override with environment variables when neede
 | `MM_START_TIMEOUT` | `90` | Seconds to wait for MagicMirror to come up |
 | `PM2_BIN` | `pm2` | Path to pm2 |
 | `PORT` / `HOST` | `8090` / `0.0.0.0` | Where the manager listens |
+| `PREVIEW_PORT` | `PORT + 1` | Port of the live preview, `0` turns it off |
+| `UPDATE_CHECK_HOURS` | `6` | How often module updates are checked in the background |
 | `DATA_DIR` | `./data` | Draft, history, backups, trash, cached module list |
+
+## Live preview
+
+The mirror tab shows the real MagicMirror page, scaled down, with your collected (not yet applied) changes. How it works:
+
+- The manager serves MagicMirror through a small proxy on its own port.
+- It swaps in the draft config.
+- It adds a tiny script that reports where each module is drawn, so you can click and drag the real modules.
+
+Two limits:
+
+- Modules that run code on the server (`node_helper`) and were only just added show their data once the change is applied, because MagicMirror loads them at start.
+- The preview talks to the running MagicMirror like a second screen would. Modules with hardware (sensors, buttons) are better tested on the mirror itself. The eye button switches to a plain sketch.
 
 ## Security
 
