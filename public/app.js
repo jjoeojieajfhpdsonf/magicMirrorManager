@@ -254,9 +254,14 @@ function mirrorView() {
 		const fab = h("button", { class: "fab", "aria-label": t("add.title"), onclick: () => addSheet() }, icon("plus"));
 		return h("div", {}, wrap, fab);
 	}
+	const open = S.panel === "add" || (S.selected !== null && S.selected !== undefined);
+	if (!open) {
+		queueMicrotask(renderPending);
+		return h("div", { class: "studio" }, h("div", { class: "stage" }, wrap));
+	}
 	const panel = h("div", { class: "inspector-main" });
 	const inspector = h("aside", { class: "inspector" }, panel, h("div", { class: "inspector-foot" }));
-	const studio = h("div", { class: "studio" }, h("div", { class: "stage" }, wrap), inspector);
+	const studio = h("div", { class: "studio has-panel" }, h("div", { class: "stage" }, wrap), inspector);
 	queueMicrotask(() => {
 		fillInspector(panel);
 		renderPending();
@@ -264,24 +269,26 @@ function mirrorView() {
 	return studio;
 }
 
+// Opens the side panel (laptop) for a module or for adding one; null closes it.
+function showPanel(kind, index = null) {
+	S.panel = kind;
+	S.selected = kind === "entry" ? index : null;
+	if (kind && inspectorHost()) {
+		refreshMirror();
+		fillInspector();
+	} else renderView();
+}
+
 function inspectorHost() {
 	return document.querySelector(".inspector-main");
 }
 
-// Inspector content: the selected module, the "add" list, or a calm hint.
-function fillInspector(host = inspectorHost(), mode = null) {
+// Inspector content: the selected module or the "add" list.
+function fillInspector(host = inspectorHost()) {
 	if (!host || !host.isConnected) return;
 	if (S.selected !== null && S.selected !== undefined && S.state.entries[S.selected]) return entrySheet(S.selected, host);
-	if (mode === "add") return addSheet(null, host);
-	fill(
-		host,
-		h(
-			"div",
-			{ class: "inspector-empty" },
-			h("div", { class: "muted" }, t("inspector.hint")),
-			h("button", { class: "btn", onclick: () => fillInspector(host, "add") }, icon("plus"), t("add.title"))
-		)
-	);
+	if (S.panel === "add") return addSheet(null, host);
+	showPanel(null);
 }
 
 // Re-draws only the mirror sketch (keeps the inspector as it is).
@@ -308,6 +315,7 @@ function mirrorWrap() {
 		"div",
 		{ class: "mirror-foot" },
 		h("div", { class: "hint" }, st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
+		h("button", { class: "btn desk-only", onclick: () => showPanel("add") }, icon("plus"), t("add.short")),
 		h("button", { class: "icon-btn", "aria-label": t("mirror.rotate"), title: t("mirror.rotate"), onclick: toggleOrientation }, icon("rotate"))
 	);
 	const wrap = h("div", { class: `mirror-wrap${S.landscape ? " is-landscape" : ""}` }, h("div", { class: "mirror-col" }, mirror, tray, foot));
@@ -450,11 +458,8 @@ function setupDrag(root) {
 		if (!c) return;
 		if (suppressClick) return;
 		const index = Number(c.dataset.index);
-		if (isWide()) {
-			S.selected = index;
-			refreshMirror();
-			fillInspector();
-		} else entrySheet(index);
+		if (isWide()) showPanel("entry", index);
+		else entrySheet(index);
 	});
 	// remove global listeners when the view is replaced
 	const obs = new MutationObserver(() => {
@@ -550,7 +555,7 @@ function picker(current, onPick, { allowNone = true } = {}) {
 
 async function entrySheet(index, host = null) {
 	const s = host
-		? openPanel(host, { onClose: () => { S.selected = null; refreshMirror(); fillInspector(host); } })
+		? openPanel(host, { onClose: () => showPanel(null) })
 		: openSheet({ onClose: () => render() });
 	let d = null;
 	let idx = index;
@@ -566,7 +571,10 @@ async function entrySheet(index, host = null) {
 		const res = await guard(() => api("POST", "/api/op", { index: idx, module: d.module, ...body }));
 		if (!res) return false;
 		if (typeof res.index === "number") idx = res.index;
-		if (host) S.selected = idx;
+		if (host) {
+			S.selected = idx;
+			S.panel = "entry";
+		}
 		applied(res);
 		if (reload) await load();
 		return true;
@@ -763,7 +771,7 @@ async function entrySheet(index, host = null) {
 // ---------- add module ----------
 
 async function addSheet(preset = null, host = null) {
-	const s = host ? openPanel(host, { onClose: () => fillInspector(host) }) : openSheet({ onClose: () => render() });
+	const s = host ? openPanel(host, { onClose: () => showPanel(null) }) : openSheet({ onClose: () => render() });
 	s.setHead(t("add.title"));
 	let pos = preset || "top_left";
 	const mods = await loadModules();
@@ -782,9 +790,9 @@ async function addSheet(preset = null, host = null) {
 						if (!res) return;
 						toast(t("chg.add", { m: moduleLabel(name) }));
 						if (host) {
-							S.selected = res.entries.length - 1;
-							applied(res);
-							fillInspector(host);
+							S.state = res;
+							showPanel("entry", res.entries.length - 1);
+							renderPending();
 						} else {
 							S.state = res;
 							s.close();
