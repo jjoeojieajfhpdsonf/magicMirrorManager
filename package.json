@@ -1,6 +1,6 @@
 {
 	"name": "magicmirror-manager",
-	"version": "0.1.0",
+	"version": "0.9.0",
 	"description": "A safe, simple web app to manage MagicMirror\u00b2 modules: layout, settings, install, update \u2013 with automatic backup and rollback.",
 	"main": "server.js",
 	"scripts": {

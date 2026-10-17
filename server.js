@@ -19,6 +19,8 @@ const { UserError } = require("./lib/errors");
 const { writeAtomic, readJSON, writeJSON } = require("./lib/util");
 const { setupDemo } = require("./lib/demo");
 const { Preview } = require("./lib/preview");
+const { Auth } = require("./lib/auth");
+const { Core } = require("./lib/core");
 
 const PORT = Number(process.env.PORT) || 8090;
 const PREVIEW_PORT = process.env.PREVIEW_PORT === "0" ? 0 : Number(process.env.PREVIEW_PORT) || PORT + 1;
@@ -43,9 +45,11 @@ const mirror = new Mirror({
 	selfDir: __dirname
 });
 const store = new Store(DATA_DIR);
+const auth = new Auth(process.env.PASSWORD, DATA_DIR);
 const jobs = new Jobs();
 const modules = new Modules(mirror, DATA_DIR);
 const catalog = new Catalog(DATA_DIR);
+const core = new Core(mirror);
 
 // ---------- manager settings (shared by all devices) ----------
 
@@ -94,6 +98,7 @@ function state() {
 		ok: true,
 		version: VERSION,
 		demo: DEMO,
+		auth: auth.enabled,
 		settings: settings(),
 		preview: preview && preview.server ? { port: PREVIEW_PORT } : null,
 		rev: mirror.configHash(w.text),
@@ -104,7 +109,8 @@ function state() {
 		parseError,
 		draft: w.draft ? { changes: w.draft.changes, updated: w.draft.updated } : null,
 		conflict: w.conflict ? { changes: w.conflict.changes } : null,
-		job: jobs.current ? { id: jobs.current.id, type: jobs.current.type } : null
+		job: jobs.current ? { id: jobs.current.id, type: jobs.current.type } : null,
+		core: core.info
 	};
 }
 
@@ -187,9 +193,9 @@ async function restartAndVerify(api, before) {
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".webmanifest": "application/manifest+json", ".json": "application/json" };
 
-function send(req, res, status, body, type = "application/json; charset=utf-8") {
+function send(req, res, status, body, type = "application/json; charset=utf-8", extra = {}) {
 	let data = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
-	const headers = { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
+	const headers = { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...extra };
 	if (data.length > 1024 && /\bgzip\b/.test(req.headers["accept-encoding"] || "") && /json|text|javascript|svg/.test(type)) {
 		data = zlib.gzipSync(data);
 		headers["Content-Encoding"] = "gzip";
@@ -372,6 +378,23 @@ route("POST", "/api/modules/install", (body) => {
 	});
 });
 
+route("POST", "/api/modules/:name/revert", (body, p) =>
+	jobs.start("revert", p.name, [{ key: "restore", label: "restoreVersion" }, { key: "restart", label: "restart" }, { key: "verify", label: "verify" }], (api) =>
+		modules.revert(api, p.name, { restartAndVerify, isActive: () => isActive(p.name) })
+	)
+);
+
+route("GET", "/api/trash", () => ({ items: modules.trash() }));
+
+route("POST", "/api/trash/:id/restore", (body, p) => jobs.start("untrash", p.id.replace(/-\d{4}-.*$/, ""), [{ key: "restore", label: "restore" }], (api) => modules.restoreFromTrash(api, p.id)));
+
+route("POST", "/api/mm/check", async () => (DEMO ? null : core.check()));
+
+route("POST", "/api/mm/update", () => {
+	if (DEMO) throw new UserError("Not available in demo mode");
+	return jobs.start("mmUpdate", "MagicMirror", core.steps(), (api) => core.update(api, { restartAndVerify }));
+});
+
 route("GET", "/api/catalog", async (body, p, query) => catalog.get({ refresh: query.get("refresh") === "1" }));
 
 function isActive(name) {
@@ -389,6 +412,7 @@ async function backgroundUpdateCheck() {
 	if (jobs.busy() || modules.checking) return;
 	try {
 		await modules.checkUpdates({ step() {}, log() {} });
+		if (!DEMO) await core.check();
 	} catch (err) {
 		console.error(`Update check failed: ${err.message}`);
 	}
@@ -408,6 +432,18 @@ const server = http.createServer(async (req, res) => {
 		if (req.method !== "GET" && req.method !== "HEAD") return send(req, res, 405, "Method not allowed", "text/plain");
 		return serveStatic(req, res, url.pathname);
 	}
+	try {
+		// login / logout and the password check for everything else
+		if (url.pathname === "/api/login" && req.method === "POST") {
+			const body = await readBody(req);
+			const cookie = auth.login(body.password, req.socket.remoteAddress);
+			return send(req, res, 200, { ok: true }, undefined, { "Set-Cookie": cookie });
+		}
+		if (url.pathname === "/api/logout" && req.method === "POST") return send(req, res, 200, { ok: true }, undefined, { "Set-Cookie": auth.logout(req) });
+		if (!auth.check(req)) return send(req, res, 401, { error: "Please log in", login: true });
+	} catch (err) {
+		return send(req, res, err instanceof UserError ? 400 : 500, { error: err.message });
+	}
 	const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
 	if (!r) return send(req, res, 404, { error: "Not found" });
 	try {
@@ -423,7 +459,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 // Live preview of the draft on its own port (not in demo mode: there is no real mirror).
-const preview = DEMO || !PREVIEW_PORT ? null : new Preview({ port: PREVIEW_PORT, host: HOST, mirror, draftText: () => working().text });
+const preview = DEMO || !PREVIEW_PORT ? null : new Preview({ port: PREVIEW_PORT, host: HOST, mirror, auth, draftText: () => working().text });
 if (preview) preview.start();
 
 server.listen(PORT, HOST, () => {

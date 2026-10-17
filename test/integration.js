@@ -72,7 +72,7 @@ async function main() {
 	await step("MagicMirror is found and running", async () => {
 		const st = await api("GET", "/api/status");
 		assert.equal(st.data.process.found, true, JSON.stringify(st.data.process));
-		assert.equal(st.data.process.status, "online");
+		if (st.data.process.kind === "pm2") assert.equal(st.data.process.status, "online");
 		assert.equal(st.data.http.up, true);
 	});
 
@@ -97,7 +97,7 @@ async function main() {
 		assert.equal(fs.readFileSync(CONFIG, "utf8"), configBefore);
 		const st = await api("GET", "/api/status");
 		assert.equal(st.data.http.up, true);
-		assert.equal(st.data.process.status, "online");
+		if (st.data.process.kind === "pm2") assert.equal(st.data.process.status, "online");
 		await api("POST", "/api/draft/discard");
 	});
 
@@ -135,6 +135,16 @@ async function main() {
 		assert.notEqual(u.result.from, u.result.to);
 	});
 
+	await step("undo update: the previous version comes back", async () => {
+		const head = (await run("git", ["rev-parse", "HEAD"], SIMPLE)).trim();
+		const r = await job("POST", "/api/modules/MMM-SimpleText/revert");
+		assert.equal(r.status, "done", JSON.stringify(r));
+		assert.notEqual((await run("git", ["rev-parse", "HEAD"], SIMPLE)).trim(), head);
+		const again = await job("POST", "/api/modules/MMM-SimpleText/revert");
+		assert.equal(again.status, "done");
+		assert.equal((await run("git", ["rev-parse", "HEAD"], SIMPLE)).trim(), head);
+	});
+
 	await step("update failure: the module folder is restored", async () => {
 		await run("git", ["reset", "--quiet", "--hard", "HEAD~1"], SIMPLE);
 		const head = (await run("git", ["rev-parse", "HEAD"], SIMPLE)).trim();
@@ -156,6 +166,15 @@ async function main() {
 		assert.equal(u.status, "done");
 		assert.ok(!fs.existsSync(SIMPLE));
 		assert.ok(fs.readdirSync(path.join(DATA, "trash")).some((d) => d.startsWith("MMM-SimpleText-")));
+	});
+
+	await step("trash: an uninstalled module can be restored", async () => {
+		const items = (await api("GET", "/api/trash")).data.items;
+		const item = items.find((x) => x.name === "MMM-SimpleText");
+		assert.ok(item);
+		const r = await job("POST", `/api/trash/${item.id}/restore`);
+		assert.equal(r.status, "done", JSON.stringify(r));
+		assert.ok(fs.existsSync(path.join(SIMPLE, "MMM-SimpleText.js")));
 	});
 
 	await step("history: restore the very first state", async () => {

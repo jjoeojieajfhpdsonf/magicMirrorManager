@@ -3,10 +3,21 @@
 A small web app to manage the modules of a [MagicMirror²](https://magicmirror.builders/), from your phone or laptop, without ever breaking the mirror.
 
 - **Arrange** modules with drag and drop on a **live preview** of your mirror. The preview already shows your unsaved changes, with real content.
-- **Configure** modules with switches and fields. The default values are read straight from each module's source code.
+- **Configure** modules without touching code: switches, fields, dropdowns and forms for lists. Default values and possible choices are read straight from each module's source code.
 - **Find and install** modules from the [official module list](https://modules.magicmirror.builders/).
-- **Update** modules (checked automatically every 6 hours), and see what changed before you update.
+- **Update** modules (checked automatically every 6 hours), see what changed, and undo an update with one tap. Uninstalled modules go to a trash you can restore from.
+- **Update MagicMirror itself**, with the same safety net.
 - **Undo** any change from the history.
+
+<p align="center">
+  <img src="docs/screenshots/laptop-live-preview.png" alt="Live preview of the mirror with the settings of the clock module" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/phone-live-preview.png" alt="Live preview on a phone" width="24%">
+  <img src="docs/screenshots/phone-catalog.png" alt="Searching the module list" width="24%">
+  <img src="docs/screenshots/phone-system.png" alt="Status, restart and history" width="24%">
+</p>
 
 It is a single Node.js process with **no dependencies** (no `npm install`), plus a plain JavaScript web app. The interface is available in German and English.
 
@@ -41,6 +52,14 @@ Module updates work the same way:
 3. `npm install` runs only if `package.json` or the lock file changed.
 4. The mirror is restarted and verified.
 5. If anything fails, the old folder comes back.
+
+Updating MagicMirror itself:
+
+1. The Node.js version required by the new release is checked first.
+2. The `node_modules` folder is renamed (instant, no extra space).
+3. `git pull` runs, then MagicMirror's own install script.
+4. The mirror is restarted and verified.
+5. If anything fails, git goes back to the old version and the old `node_modules` folder comes back.
 
 New modules are cloned next to the modules folder first and only moved into place once the install has finished, so an aborted install leaves nothing behind. Uninstalled modules go to a trash folder instead of being deleted.
 
@@ -89,6 +108,7 @@ Everything has sensible defaults. Override with environment variables when neede
 | `MM_URL` | from `config.js` | Address of MagicMirror's web server, if it can't be derived |
 | `MM_START_TIMEOUT` | `90` | Seconds to wait for MagicMirror to come up |
 | `PM2_BIN` | `pm2` | Path to pm2 |
+| `PASSWORD` | – | Optional password for the web app (and the live preview) |
 | `PORT` / `HOST` | `8090` / `0.0.0.0` | Where the manager listens |
 | `PREVIEW_PORT` | `PORT + 1` | Port of the live preview, `0` turns it off |
 | `UPDATE_CHECK_HOURS` | `6` | How often module updates are checked in the background |
@@ -109,7 +129,15 @@ Two limits:
 
 ## Security
 
-The manager has **no login**, like MagicMirror itself. It can change your config and install software, so only make it reachable on your **home network or through a VPN** such as Tailscale. Never forward it to the internet.
+The manager can change your config and install software. Without a password it is open to everyone who can reach it, like MagicMirror itself. Keep it on your **home network or behind a VPN** such as Tailscale and never forward it to the internet.
+
+To require a password, start it with one:
+
+```bash
+PASSWORD='choose-a-good-one' sh tools/install.sh
+```
+
+The live preview port is protected by the same login: without it, the preview would expose your mirror even if MagicMirror's own `ipWhitelist` is strict.
 
 ## Try it without a mirror
 
@@ -144,6 +172,9 @@ How the code is organised:
 | `lib/mirror.js` | MagicMirror paths, pm2 control and the health check |
 | `lib/modules.js` | Install, update with backup/rollback, uninstall |
 | `lib/catalog.js` | The official module list, cached for offline use |
+| `lib/core.js` | Updating MagicMirror itself |
+| `lib/preview.js` | Live preview proxy (draft config, stale-page guard) |
+| `lib/choices.js` | Finds the possible values of an option in the module's code |
 | `public/` | The web app (no build step) |
 
 `test/fixtures/sample.config.js` is MagicMirror's sample config (MIT license).

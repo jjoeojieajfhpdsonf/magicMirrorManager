@@ -54,6 +54,9 @@
 	};
 
 	const start = () => {
+		const style = document.createElement("style");
+		style.textContent = ".region.fullscreen.above { display: none !important; }";
+		document.head.appendChild(style);
 		new MutationObserver(schedule).observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
 		addEventListener("resize", schedule);
 		setInterval(report, 2500);
@@ -65,6 +68,7 @@
 	addEventListener("message", (ev) => {
 		const d = ev.data;
 		if (ev.source !== window.parent || !d || typeof d.mmmPreview !== "string") return;
+		if (d.mmmPreview === "config") return applyConfig(d);
 		const el = moduleEl(d.id);
 		if (!el) return;
 		if (d.mmmPreview === "hide") el.style.display = d.hidden ? "none" : "";
@@ -83,6 +87,26 @@
 		}
 		schedule();
 	});
+
+	// New title or setting: give it to the running module and let it redraw. Modules that
+	// read their settings only at start show the change when the new page has loaded.
+	function applyConfig(d) {
+		const mm = window.MM;
+		const m = mm && mm.getModules ? mm.getModules().find((x) => x.identifier && x.identifier.startsWith(`module_${d.id}_`)) : null;
+		if (!m) return;
+		if ("header" in d) m.data.header = d.header || undefined;
+		if (d.patch || d.reset) {
+			const cfg = Object.assign({}, m.config, d.patch || {});
+			for (const k of d.reset || []) cfg[k] = m.defaults ? m.defaults[k] : undefined;
+			m.config = cfg;
+		}
+		try {
+			m.updateDom(0);
+		} catch {
+			// the module can't redraw on its own; the reloaded page will show it
+		}
+		schedule();
+	}
 
 	if (document.body) start();
 	else addEventListener("DOMContentLoaded", start);

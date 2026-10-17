@@ -75,6 +75,10 @@ async function api(method, url, body) {
 	} catch {
 		// not JSON
 	}
+	if (res.status === 401 && data && data.login) {
+		showLogin();
+		throw new Error(data.error);
+	}
 	if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
 	return data;
 }
@@ -196,7 +200,11 @@ function switchTab(tab) {
 	window.scrollTo(0, 0);
 	render();
 	if (tab === "modules") loadModules().then(renderView);
-	if (tab === "system") loadStatus();
+	if (tab === "system") {
+		loadStatus();
+		// look for a MagicMirror update once, if the background check hasn't run yet
+		if (S.state && S.state.ok && !S.state.demo && !S.state.core) api("POST", "/api/mm/check").then(() => refresh({ soft: true })).catch(() => {});
+	}
 }
 
 function renderView() {
@@ -274,10 +282,7 @@ function mirrorView() {
 	if (st.parseError) return h("div", { class: "note bad" }, st.parseError);
 	if (S.selected !== undefined && S.selected !== null && !st.entries[S.selected]) S.selected = null;
 	const wrap = mirrorWrap();
-	if (!isWide()) {
-		const fab = h("button", { class: "fab", "aria-label": t("add.title"), onclick: () => addSheet() }, icon("plus"));
-		return h("div", {}, wrap, fab);
-	}
+	if (!isWide()) return wrap;
 	const open = S.panel === "add" || (S.selected !== null && S.selected !== undefined);
 	if (!open) {
 		queueMicrotask(renderPending);
@@ -381,7 +386,7 @@ function footEl(st) {
 		"div",
 		{ class: "mirror-foot" },
 		h("div", { class: "hint" }, LIVE.failed && S.view === "live" ? t("mirror.liveFailed") : st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
-		h("button", { class: "btn desk-only", onclick: () => showPanel("add") }, icon("plus"), t("add.short")),
+		h("button", { class: "btn", onclick: () => (isWide() ? showPanel("add") : addSheet()) }, icon("plus"), t("add.short")),
 		st.preview ? h("button", { class: "icon-btn", "aria-label": liveLabel, title: liveLabel, onclick: toggleView }, icon(S.view === "live" ? "sketch" : "eye")) : null,
 		h("button", { class: "icon-btn", "aria-label": t("mirror.rotate"), title: t("mirror.rotate"), onclick: toggleOrientation }, icon("rotate"))
 	);
@@ -896,6 +901,10 @@ async function entrySheet(index, host = null) {
 		const sent = { index: idx, module: d.module, ...body };
 		if (body.op === "move") previewTell({ type: "move", position: body.position || null }, idx);
 		if (body.op === "toggle") previewTell({ type: "hide", hidden: body.disabled }, idx);
+		// title and settings: show them in the preview right away
+		if (body.op === "setHeader") previewTell({ type: "config", header: body.header }, idx);
+		if (body.op === "setOption" && body.value !== undefined) previewTell({ type: "config", patch: { [body.key]: body.value } }, idx);
+		if (body.op === "resetOption") previewTell({ type: "config", reset: [body.key] }, idx);
 		const res = await guard(() => api("POST", "/api/op", sent));
 		if (!res) return false;
 		if (typeof res.index === "number") idx = res.index;
@@ -994,10 +1003,33 @@ async function entrySheet(index, host = null) {
 		if (type === "boolean") {
 			return h("div", { class: `field${isSet ? " changed" : ""}` }, label, reset, h("label", { class: "switch" }, h("input", { type: "checkbox", checked: !!src.value, onchange: (e) => setValue(e.target.checked) }), h("span")));
 		}
+		const choices = def && def.choices;
+		if (type === "string" && choices) {
+			const custom = "__custom__";
+			const cur = String(src.value);
+			const options = choices.includes(cur) ? choices : [...choices, cur];
+			const select = h(
+				"select",
+				{
+					class: "input select",
+					onchange: (e) => {
+						if (e.target.value !== custom) return setValue(e.target.value);
+						// switch to a text field for a value the list doesn't know
+						const input = h("input", { class: "input text", value: cur, onchange: (ev) => setValue(ev.target.value) });
+						select.replaceWith(input);
+						input.focus();
+					}
+				},
+				options.map((c) => h("option", { value: c, selected: c === cur }, c)),
+				h("option", { value: custom }, t("entry.customValueOption"))
+			);
+			return h("div", { class: `field${isSet ? " changed" : ""}` }, label, reset, select);
+		}
 		if (type === "number" || type === "string") {
 			const input = h("input", {
 				class: `input ${type === "number" ? "num" : "text"}`,
 				value: String(src.value),
+				style: type === "number" ? numberWidth(src.value) : null,
 				inputmode: type === "number" ? "decimal" : null,
 				onchange: (e) => {
 					if (type === "number") {
@@ -1266,6 +1298,8 @@ function resultBlock(j) {
 	if (j.type === "apply" || j.type === "restore") text = r.notRestarted ? t("job.notRestarted") : t("job.doneApply");
 	if (j.type === "install") text = r.addedToDraft ? t("job.installed") : t("job.installedOnly");
 	if (j.type === "update" && r.from) text = r.from === r.to ? t("job.noUpdates") : `${r.from} → ${r.to}`;
+	if (j.type === "mmUpdate") text = r.upToDate ? t("job.noUpdates") : `MagicMirror ${r.from} → ${r.to}`;
+	if (j.type === "untrash") text = t("trash.restored");
 	if (j.type === "checkUpdates") text = r.available ? t("job.updatesFound", { n: r.available }) : t("job.noUpdates");
 	const warnings = (r.warnings || []).filter(Boolean);
 	return block(r.notRestarted ? "warn" : "ok", "check", t("job.done"), text, warnings.length ? h("details", {}, h("summary", {}, t("job.warnings")), h("div", { class: "log" }, warnings.join("\n"))) : null);
@@ -1295,6 +1329,7 @@ function modulesView() {
 	}
 	const sorted = [...m.modules].sort((a, b) => (b.update && b.update.behind ? 1 : 0) - (a.update && a.update.behind ? 1 : 0));
 	wrap.append(h("div", { class: "card" }, sorted.map(moduleRow)));
+	wrap.append(trashSection());
 	return wrap;
 }
 
@@ -1318,6 +1353,28 @@ function moduleRow(m) {
 		pills,
 		h("span", { class: "chev", html: ICONS.chev })
 	);
+}
+
+// Uninstalled modules wait in the manager's trash (the last 10).
+function trashSection() {
+	const box = h("div");
+	api("GET", "/api/trash")
+		.then((r) => {
+			if (!r.items.length) return;
+			const list = h("div", { class: "card", hidden: true }, r.items.map((it) =>
+				h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(it.name)), h("div", { class: "sub" }, it.time.replace("_", " ").replace(/-(\d\d)-(\d\d)$/, ":$1"))), h("button", { class: "btn", onclick: async () => {
+					const job = await guard(() => api("POST", `/api/trash/${encodeURIComponent(it.id)}/restore`));
+					if (job) jobSheet(job);
+				} }, t("trash.restore")))
+			));
+			const toggle = h("button", { class: "row more-toggle", onclick: () => {
+				list.hidden = !list.hidden;
+				toggle.classList.toggle("open", !list.hidden);
+			} }, h("span", { class: "grow" }, t("trash.title", { n: r.items.length })), h("span", { class: "chev", html: ICONS.chev }));
+			fill(box, h("div", { class: "card", style: "margin-top:16px" }, toggle), h("div", { style: "margin-top:8px" }, list));
+		})
+		.catch(() => {});
+	return box;
 }
 
 async function checkUpdates() {
@@ -1364,6 +1421,18 @@ async function moduleSheet(name) {
 		} }, t("modules.updateNow")));
 	}
 	if (m.update && m.update.error) parts.push(h("div", { class: "note bad" }, m.update.error));
+	if (m.previous) {
+		parts.push(
+			h("div", { class: "card", style: "margin-top:12px" }, h("button", { class: "row", onclick: async () => {
+				if (!(await confirmSheet(t("modules.revertConfirm", { name: m.name, v: m.previous.version || m.previous.commit || "" }), t("modules.revert")))) return;
+				const job = await guard(() => api("POST", `/api/modules/${encodeURIComponent(name)}/revert`));
+				if (job) {
+					s.close();
+					jobSheet(job);
+				}
+			} }, h("div", { class: "grow" }, h("div", {}, t("modules.revert")), h("div", { class: "sub" }, [m.previous.version, m.previous.commit].filter(Boolean).join(" · "))), icon("undo")))
+		);
+	}
 	const actions = h(
 		"div",
 		{ class: "card", style: "margin-top:18px" },
@@ -1536,6 +1605,7 @@ function systemView() {
 			{ class: "card" },
 			h("div", { class: "status-line" }, h("div", { class: `dot ${st ? (running ? "ok" : "bad") : ""}` }), h("div", { class: "grow" }, h("div", { class: "title", style: "font-weight:650" }, st ? (running ? t("system.running") : t("system.stopped")) : t("system.unknown")), sub.length ? h("div", { class: "sub small muted" }, sub.join(" · ")) : null), h("button", { class: "btn", onclick: restartMirror, disabled: !!S.restarting }, S.restarting ? t("system.restarting", { n: S.restarting.sec || "" }).trim() : t("system.restart"))),
 			S.restartError ? h("div", { class: "note bad", style: "margin:0 16px 14px" }, S.restartError) : null,
+			coreUpdateRow(),
 			st ? h("div", { class: "stat-grid" }, stat(t("system.version"), st.version ? `MagicMirror ${st.version}` : "–"), stat(t("system.process"), p && p.found ? p.name : "–"), stat(t("system.restarts"), p && p.restarts !== undefined ? String(p.restarts) : "–")) : null
 		)
 	);
@@ -1564,8 +1634,26 @@ function systemView() {
 	const langPref = store("lang") || "";
 	const seg = h("div", { class: "seg" }, [["", t("system.langAuto")], ["de", "Deutsch"], ["en", "English"]].map(([v, label]) => h("button", { class: langPref === v ? "sel" : "", onclick: () => { store("lang", v); setLang(v); render(); } }, label)));
 	wrap.append(h("div", { class: "card", style: "margin-top:16px" }, h("div", { class: "field" }, h("div", { class: "label" }, h("div", { class: "k" }, t("system.language"))), seg)));
+	if (S.state.auth) wrap.append(h("div", { class: "card", style: "margin-top:16px" }, h("button", { class: "row", onclick: logout }, h("span", { class: "grow" }, t("login.logout")))));
 	wrap.append(h("div", { class: "hint", style: "margin-top:22px" }, t("system.about", { v: S.state.version })));
 	return wrap;
+}
+
+// "MagicMirror 2.38 available" with an update button (after the background check).
+function coreUpdateRow() {
+	const c = S.state.core;
+	if (!c || !c.behind) return null;
+	const blocked = !c.nodeOk ? t("core.node", { node: c.node, have: c.nodeVersion }) : c.blocking && c.blocking.length ? t("core.changed", { files: c.blocking.join(", ") }) : null;
+	return h(
+		"div",
+		{ class: "core-update" },
+		h("div", { class: "grow" }, h("div", { class: "title" }, t("core.available", { v: c.version || "?" })), h("div", { class: "sub small muted" }, blocked || t("core.hint"))),
+		h("button", { class: "btn primary", disabled: !!blocked, onclick: async () => {
+			if (!(await confirmSheet(t("core.confirm", { from: c.current, to: c.version }), t("core.update")))) return;
+			const job = await guard(() => api("POST", "/api/mm/update"));
+			if (job) jobSheet(job, { onDone: loadStatus });
+		} }, t("core.update"))
+	);
 }
 
 function stat(k, v) {
@@ -1698,6 +1786,32 @@ function guessValue(text) {
 document.addEventListener("keydown", (e) => {
 	if (e.key === "Escape" && !document.querySelector(".sheet") && isWide() && S.panel && S.tab === "mirror") showPanel(null);
 });
+
+// ---------- login (only when the manager runs with a password) ----------
+
+function showLogin() {
+	if (document.querySelector(".login")) return;
+	const input = h("input", { class: "input wide", type: "password", autocomplete: "current-password", placeholder: t("login.password") });
+	const err = h("div", { class: "note bad", hidden: true });
+	const submit = async (e) => {
+		e.preventDefault();
+		const res = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: input.value }) });
+		if (res.ok) return location.reload();
+		const data = await res.json().catch(() => ({}));
+		err.textContent = data.error || t("common.error");
+		err.hidden = false;
+		input.select();
+	};
+	document.body.append(
+		h("div", { class: "login" }, h("form", { class: "login-card", onsubmit: submit }, h("img", { src: "icon.svg", alt: "", width: 56, height: 56 }), h("h2", {}, "MagicMirror Manager"), input, err, h("button", { class: "btn primary block", type: "submit" }, t("login.submit"))))
+	);
+	input.focus();
+}
+
+async function logout() {
+	await fetch("/api/logout", { method: "POST" });
+	location.reload();
+}
 
 // ---------- start ----------
 

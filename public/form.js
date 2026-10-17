@@ -19,6 +19,7 @@ function valueInput(value, onChange) {
 		return h("input", {
 			class: "input num",
 			value: String(value),
+			style: numberWidth(value),
 			inputmode: "decimal",
 			onchange: (e) => {
 				const n = Number(e.target.value.replace(",", "."));
@@ -28,6 +29,11 @@ function valueInput(value, onChange) {
 		});
 	}
 	return h("input", { class: "input grow-input", value: value === null ? "" : String(value), spellcheck: "false", onchange: (e) => onChange(e.target.value) });
+}
+
+// number fields grow with long values (e.g. 604800000)
+function numberWidth(value) {
+	return `width:${Math.max(7, String(value).length + 3)}ch`;
 }
 
 const isPrimitive = (v) => v === null || ["string", "number", "boolean"].includes(typeof v);
