@@ -179,7 +179,7 @@ async function restartAndVerify(api, before) {
 		step("verify", "failed", v.reason);
 		return { ok: false, reason: v.reason, log: v.log };
 	}
-	step("verify", "done", v.warnings.length ? v.warnings.join("\n") : "");
+	step("verify", "done");
 	return { ok: true, warnings: v.warnings };
 }
 
@@ -381,6 +381,24 @@ function isActive(name) {
 		return true;
 	}
 }
+
+// ---------- automatic update checks ----------
+
+const UPDATE_CHECK_HOURS = Number(process.env.UPDATE_CHECK_HOURS) || 6;
+async function backgroundUpdateCheck() {
+	if (jobs.busy() || modules.checking) return;
+	try {
+		await modules.checkUpdates({ step() {}, log() {} });
+	} catch (err) {
+		console.error(`Update check failed: ${err.message}`);
+	}
+}
+setTimeout(backgroundUpdateCheck, 60 * 1000).unref();
+setInterval(backgroundUpdateCheck, UPDATE_CHECK_HOURS * 3600 * 1000).unref();
+
+// A bug in one request must not take the whole manager down (it is the safety net).
+process.on("uncaughtException", (err) => console.error("Unexpected error:", err));
+process.on("unhandledRejection", (err) => console.error("Unexpected error:", err));
 
 // ---------- server ----------
 

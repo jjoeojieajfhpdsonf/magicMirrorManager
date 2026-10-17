@@ -40,6 +40,8 @@ const ICONS = {
 	chev: "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><path d='M9 6l6 6-6 6'/></svg>",
 	refresh: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 11a8 8 0 10-2.3 5.7'/><path d='M20 5v6h-6'/></svg>",
 	rotate: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round'><rect x='7' y='3' width='10' height='18' rx='2.5'/><path d='M3 17.5V9a3 3 0 013-3' stroke-linecap='round'/></svg>",
+	eye: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8'><path d='M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z'/><circle cx='12' cy='12' r='2.8'/></svg>",
+	sketch: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round'><rect x='4' y='3' width='16' height='18' rx='3'/><rect x='7' y='6' width='5' height='3' rx='1'/><rect x='12' y='15' width='5' height='3' rx='1'/></svg>",
 	warn: "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.2' stroke-linecap='round'><path d='M12 8v5M12 16.5v.5'/></svg>"
 };
 const icon = (name) => h("span", { html: ICONS[name], style: "display:contents" });
@@ -94,6 +96,7 @@ const S = {
 	catalog: null,
 	status: null,
 	landscape: false,
+	view: "live",
 	logsOpen: false
 };
 
@@ -115,7 +118,10 @@ async function refresh() {
 	const st = await guard(() => api("GET", "/api/state"));
 	if (st) {
 		S.state = st;
-		if (st.settings) S.landscape = st.settings.orientation === "landscape";
+		if (st.settings) {
+			S.landscape = st.settings.orientation === "landscape";
+			S.view = st.settings.view || "live";
+		}
 	}
 	render();
 }
@@ -259,24 +265,37 @@ function mirrorView() {
 		queueMicrotask(renderPending);
 		return h("div", { class: "studio" }, h("div", { class: "stage" }, wrap));
 	}
-	const panel = h("div", { class: "inspector-main" });
-	const inspector = h("aside", { class: "inspector" }, panel, h("div", { class: "inspector-foot" }));
-	const studio = h("div", { class: "studio has-panel" }, h("div", { class: "stage" }, wrap), inspector);
+	const studio = h("div", { class: "studio has-panel" }, h("div", { class: "stage" }, wrap), inspectorShell());
 	queueMicrotask(() => {
-		fillInspector(panel);
+		fillInspector();
 		renderPending();
 	});
 	return studio;
 }
 
+function inspectorShell() {
+	return h("aside", { class: "inspector" }, h("div", { class: "inspector-main" }), h("div", { class: "inspector-foot" }));
+}
+
 // Opens the side panel (laptop) for a module or for adding one; null closes it.
+// The mirror stays in place, so the live preview doesn't reload.
 function showPanel(kind, index = null) {
 	S.panel = kind;
 	S.selected = kind === "entry" ? index : null;
-	if (kind && inspectorHost()) {
-		refreshMirror();
-		fillInspector();
-	} else renderView();
+	const studio = document.querySelector("#view .studio");
+	if (!isWide() || !studio) return renderView();
+	let insp = studio.querySelector(".inspector");
+	if (kind && !insp) {
+		insp = inspectorShell();
+		studio.append(insp);
+		studio.classList.add("has-panel");
+	} else if (!kind && insp) {
+		insp.remove();
+		studio.classList.remove("has-panel");
+	}
+	refreshMirror();
+	if (kind) fillInspector();
+	renderPending();
 }
 
 function inspectorHost() {
@@ -291,14 +310,19 @@ function fillInspector(host = inspectorHost()) {
 	showPanel(null);
 }
 
-// Re-draws only the mirror sketch (keeps the inspector as it is).
+// Re-draws the mirror (keeps the inspector as it is). The live preview is updated in place.
 function refreshMirror() {
 	const old = document.querySelector("#view .mirror-wrap");
-	if (old && S.tab === "mirror") old.replaceWith(mirrorWrap());
+	if (!old || S.tab !== "mirror") return;
+	if (isLive() && old.querySelector(".mirror.live")) return updateLive(old);
+	old.replaceWith(mirrorWrap());
 }
 
-function mirrorWrap() {
-	const st = S.state;
+function isLive() {
+	return !!(S.state && S.state.preview && S.view === "live" && !LIVE.failed);
+}
+
+function groupEntries(st) {
 	const known = new Set(st.positions);
 	const groups = {};
 	for (const e of st.entries) {
@@ -306,26 +330,230 @@ function mirrorWrap() {
 		const pos = e.position && known.has(e.position) ? e.position : "";
 		(groups[pos] = groups[pos] || []).push(e);
 	}
-	const region = (pos, extraClass = "") =>
-		h("div", { class: `region area-${pos || "none"} ${extraClass} ${(groups[pos] || []).length ? "" : "empty"}`, "data-pos": pos, "data-label": posLabel(pos || null) }, extraClass ? h("div", { class: "tray-label" }, posLabel(pos || null)) : null, (groups[pos] || []).map(chip));
+	return groups;
+}
 
-	const mirror = h("div", { class: `mirror${S.landscape ? " landscape" : ""}` }, MAIN_POSITIONS.filter((p) => known.has(p)).map((p) => region(p)));
-	const tray = h("div", { class: "tray" }, ["fullscreen_above", "fullscreen_below"].filter((p) => known.has(p)).map((p) => region(p, "tray-region")), region("", "tray-region"));
-	const foot = h(
+function regionEl(pos, items, extraClass = "") {
+	return h(
+		"div",
+		{ class: `region area-${pos || "none"} ${extraClass} ${items.length ? "" : "empty"}`, "data-pos": pos, "data-label": posLabel(pos || null) },
+		extraClass ? h("div", { class: "tray-label" }, posLabel(pos || null)) : null,
+		items.map(chip)
+	);
+}
+
+// Rows next to/below the mirror: fullscreen, without position and (live) switched off.
+function trayEl(st, groups, live) {
+	const known = new Set(st.positions);
+	const pick = (list) => (live ? list.filter((e) => !e.disabled) : list);
+	const rows = ["fullscreen_above", "fullscreen_below"].filter((p) => known.has(p)).map((p) => regionEl(p, pick(groups[p] || []), "tray-region"));
+	rows.push(regionEl("", pick(groups[""] || []), "tray-region"));
+	if (live) {
+		const off = st.entries.filter((e) => e.module && e.disabled);
+		if (off.length) rows.push(h("div", { class: "region tray-region static" }, h("div", { class: "tray-label" }, t("mirror.off")), off.map(chip)));
+	}
+	return h("div", { class: "tray" }, rows);
+}
+
+function footEl(st) {
+	const liveLabel = t(S.view === "live" ? "mirror.sketch" : "mirror.live");
+	return h(
 		"div",
 		{ class: "mirror-foot" },
-		h("div", { class: "hint" }, st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
+		h("div", { class: "hint" }, LIVE.failed && S.view === "live" ? t("mirror.liveFailed") : st.entries.length ? t("mirror.dragHint") : t("mirror.empty")),
 		h("button", { class: "btn desk-only", onclick: () => showPanel("add") }, icon("plus"), t("add.short")),
+		st.preview ? h("button", { class: "icon-btn", "aria-label": liveLabel, title: liveLabel, onclick: toggleView }, icon(S.view === "live" ? "sketch" : "eye")) : null,
 		h("button", { class: "icon-btn", "aria-label": t("mirror.rotate"), title: t("mirror.rotate"), onclick: toggleOrientation }, icon("rotate"))
 	);
-	const wrap = h("div", { class: `mirror-wrap${S.landscape ? " is-landscape" : ""}` }, h("div", { class: "mirror-col" }, mirror, tray, foot));
+}
+
+function mirrorWrap() {
+	const st = S.state;
+	const groups = groupEntries(st);
+	const known = new Set(st.positions);
+	const live = isLive();
+	let mirror;
+	if (live) {
+		// Regions are only drop targets here (and hold modules the preview doesn't draw yet).
+		const regions = h("div", { class: "live-regions" }, MAIN_POSITIONS.filter((p) => known.has(p)).map((p) => regionEl(p, [])));
+		mirror = h("div", { class: `mirror live${S.landscape ? " landscape" : ""}` }, liveFrame(), regions, h("div", { class: "live-hits" }));
+	} else {
+		mirror = h("div", { class: `mirror${S.landscape ? " landscape" : ""}` }, MAIN_POSITIONS.filter((p) => known.has(p)).map((p) => regionEl(p, groups[p] || [])));
+	}
+	const wrap = h("div", { class: `mirror-wrap${S.landscape ? " is-landscape" : ""}` }, h("div", { class: "mirror-col" }, mirror, footEl(st)), trayEl(st, groups, live));
 	setupDrag(wrap);
+	if (live) queueMicrotask(() => updateLive(wrap, true));
 	return wrap;
+}
+
+// ---------- live preview ----------
+
+const LIVE = { box: null, cur: null, next: null, rev: null, layout: null, failed: false, timer: null, observer: null, scale: 1 };
+
+function previewSize() {
+	return S.landscape ? { w: 1920, h: 1080 } : { w: 1080, h: 1920 };
+}
+
+function previewUrl() {
+	const p = S.state.preview;
+	return `${location.protocol}//${location.hostname}:${p.port}${p.path || "/"}`;
+}
+
+function makeFrame() {
+	const { w, h: ht } = previewSize();
+	const fr = h("iframe", { class: "live-iframe", src: previewUrl(), tabindex: "-1", "aria-hidden": "true", title: "MagicMirror preview" });
+	fr.style.width = `${w}px`;
+	fr.style.height = `${ht}px`;
+	fr.style.transform = `scale(${LIVE.scale})`;
+	return fr;
+}
+
+function liveFrame() {
+	LIVE.box = h("div", { class: "live-frame" });
+	LIVE.next = null;
+	LIVE.layout = null;
+	LIVE.rev = S.state.rev;
+	LIVE.cur = makeFrame();
+	LIVE.box.append(LIVE.cur);
+	watchFirstLayout(LIVE.cur);
+	return LIVE.box;
+}
+
+// If the preview never reports back, fall back to the sketch.
+function watchFirstLayout(frame) {
+	clearTimeout(LIVE.timer);
+	LIVE.timer = setTimeout(() => {
+		if (frame !== LIVE.cur || LIVE.layout) return;
+		LIVE.failed = true;
+		const old = document.querySelector("#view .mirror-wrap");
+		if (old) old.replaceWith(mirrorWrap());
+	}, 15000);
+}
+
+// Loads the changed config in a hidden second frame and swaps once it has drawn its modules.
+function reloadPreview() {
+	if (!LIVE.box) return;
+	if (LIVE.next) LIVE.next.remove();
+	const fr = makeFrame();
+	fr.classList.add("next");
+	LIVE.next = fr;
+	LIVE.box.append(fr);
+	setTimeout(() => fr === LIVE.next && swapPreview(fr), 8000);
+}
+
+function swapPreview(fr) {
+	if (LIVE.cur && LIVE.cur !== fr) LIVE.cur.remove();
+	fr.classList.remove("next");
+	LIVE.cur = fr;
+	LIVE.next = null;
+}
+
+function scalePreview(wrap) {
+	const mirror = wrap.querySelector(".mirror.live");
+	if (!mirror || !LIVE.box) return;
+	LIVE.scale = mirror.clientWidth / previewSize().w;
+	for (const fr of LIVE.box.querySelectorAll("iframe")) fr.style.transform = `scale(${LIVE.scale})`;
+	const regions = wrap.querySelector(".live-regions");
+	if (regions) regions.style.setProperty("--pad", `${60 * LIVE.scale}px`);
+	drawHits(wrap);
+}
+
+// Updates everything around the preview without reloading it (unless the config changed).
+function updateLive(wrap, first = false) {
+	const st = S.state;
+	const mirror = wrap.querySelector(".mirror.live");
+	if (!mirror) return;
+	mirror.classList.toggle("landscape", S.landscape);
+	wrap.classList.toggle("is-landscape", S.landscape);
+	const { w, h: ht } = previewSize();
+	for (const fr of LIVE.box.querySelectorAll("iframe")) {
+		fr.style.width = `${w}px`;
+		fr.style.height = `${ht}px`;
+	}
+	if (!first) {
+		wrap.querySelector(".tray").replaceWith(trayEl(st, groupEntries(st), true));
+		wrap.querySelector(".mirror-foot").replaceWith(footEl(st));
+		if (st.rev !== LIVE.rev) {
+			LIVE.rev = st.rev;
+			reloadPreview();
+		}
+	}
+	if (!LIVE.observer) {
+		LIVE.observer = new ResizeObserver(() => {
+			const wr = document.querySelector("#view .mirror-wrap");
+			if (wr) scalePreview(wr);
+		});
+	}
+	LIVE.observer.disconnect();
+	LIVE.observer.observe(mirror);
+	scalePreview(wrap);
+}
+
+// Click and drag targets on top of the modules the preview draws.
+function drawHits(wrap) {
+	const layer = wrap.querySelector(".live-hits");
+	const regions = wrap.querySelector(".live-regions");
+	if (!layer || !regions) return;
+	const st = S.state;
+	const known = new Set(st.positions);
+	// MagicMirror numbers the modules that have a valid (or no) position.
+	const loaded = st.entries.filter((e) => e.module && (!e.position || known.has(e.position)));
+	const rects = new Map();
+	for (const m of (LIVE.layout && LIVE.layout.modules) || []) {
+		const e = loaded[m.i];
+		if (e && !m.hidden && m.w > 0 && m.h > 0) rects.set(e.index, m);
+	}
+	const sc = LIVE.scale || 1;
+	const hits = [];
+	const missing = {};
+	for (const e of st.entries) {
+		if (!e.module || e.disabled || !e.position || !MAIN_POSITIONS.includes(e.position)) continue;
+		const r = rects.get(e.index);
+		if (!r) {
+			(missing[e.position] = missing[e.position] || []).push(e);
+			continue;
+		}
+		const hit = h("button", { class: `hit${isWide() && S.selected === e.index ? " sel" : ""}`, "data-index": e.index, "data-pos": e.position, "aria-label": moduleLabel(e.module) }, h("span", { class: "tag" }, moduleLabel(e.module)));
+		hit.style.left = `${r.x * sc}px`;
+		hit.style.top = `${r.y * sc}px`;
+		hit.style.width = `${Math.max(r.w * sc, 24)}px`;
+		hit.style.height = `${Math.max(r.h * sc, 18)}px`;
+		hits.push(hit);
+	}
+	fill(layer, hits);
+	// modules the preview doesn't draw (yet) stay reachable as chips in their region
+	for (const reg of regions.querySelectorAll(".region")) {
+		const items = missing[reg.dataset.pos] || [];
+		fill(reg, items.map(chip));
+		reg.classList.toggle("empty", !items.length);
+	}
+}
+
+window.addEventListener("message", (ev) => {
+	const d = ev.data;
+	if (!d || d.mmmPreview !== "layout") return;
+	if (LIVE.next && ev.source === LIVE.next.contentWindow) {
+		if (!d.modules.length) return;
+		swapPreview(LIVE.next);
+	} else if (!LIVE.cur || ev.source !== LIVE.cur.contentWindow) return;
+	LIVE.layout = d;
+	const wrap = document.querySelector("#view .mirror-wrap");
+	if (wrap && !wrap.classList.contains("dragging")) drawHits(wrap);
+});
+
+function toggleView() {
+	S.view = S.view === "live" ? "sketch" : "live";
+	LIVE.failed = false;
+	const old = document.querySelector("#view .mirror-wrap");
+	if (old) old.replaceWith(mirrorWrap());
+	guard(() => api("POST", "/api/settings", { view: S.view }));
 }
 
 function toggleOrientation() {
 	S.landscape = !S.landscape;
-	refreshMirror();
+	const old = document.querySelector("#view .mirror-wrap");
+	if (old && isLive() && old.querySelector(".mirror.live")) updateLive(old, true);
+	else refreshMirror();
 	guard(() => api("POST", "/api/settings", { orientation: S.landscape ? "landscape" : "portrait" }));
 }
 
@@ -338,15 +566,14 @@ function setupDrag(root) {
 	const clearMarks = () => {
 		root.querySelectorAll(".over").forEach((r) => r.classList.remove("over"));
 		root.querySelectorAll(".drop-line").forEach((l) => l.remove());
+		root.querySelectorAll(".drop-before").forEach((l) => l.classList.remove("drop-before"));
 	};
 
 	const start = () => {
 		if (!pending) return;
 		const src = pending.chip;
-		const rect = src.getBoundingClientRect();
-		const ghost = src.cloneNode(true);
-		ghost.classList.add("ghost");
-		ghost.style.width = `${rect.width}px`;
+		const entry = S.state.entries[Number(src.dataset.index)];
+		const ghost = h("div", { class: "chip ghost" }, moduleLabel(entry && entry.module));
 		document.body.append(ghost);
 		src.classList.add("placeholder-src");
 		root.classList.add("dragging");
@@ -365,8 +592,14 @@ function setupDrag(root) {
 			drag.target = null;
 			return;
 		}
+		if (reg.classList.contains("static")) {
+			drag.target = null;
+			return;
+		}
 		reg.classList.add("over");
-		const chips = [...reg.querySelectorAll(".chip")].filter((c) => c !== drag.src);
+		const inLive = !!reg.closest(".live-regions");
+		const liveHits = inLive ? [...root.querySelectorAll(".hit")].filter((c) => c.dataset.pos === reg.dataset.pos) : [];
+		const chips = liveHits.concat([...reg.querySelectorAll(".chip")]).filter((c) => c !== drag.src);
 		const horizontal = reg.classList.contains("tray-region");
 		let before = null;
 		for (const c of chips) {
@@ -377,7 +610,9 @@ function setupDrag(root) {
 				break;
 			}
 		}
-		if (!horizontal) {
+		if (inLive) {
+			if (before) before.classList.add("drop-before");
+		} else if (!horizontal) {
 			const line = h("div", { class: "drop-line" });
 			if (before) reg.insertBefore(line, before);
 			else reg.append(line);
@@ -416,7 +651,7 @@ function setupDrag(root) {
 	};
 
 	root.addEventListener("pointerdown", (ev) => {
-		const c = ev.target.closest(".chip");
+		const c = ev.target.closest(".chip, .hit");
 		if (!c || ev.button > 0) return;
 		pending = { chip: c, x: ev.clientX, y: ev.clientY, type: ev.pointerType };
 		if (ev.pointerType !== "mouse") pending.timer = setTimeout(start, 260);
@@ -451,10 +686,10 @@ function setupDrag(root) {
 	window.addEventListener("pointercancel", onCancel);
 	document.addEventListener("touchmove", onTouchMove, { passive: false });
 	root.addEventListener("contextmenu", (ev) => {
-		if (ev.target.closest(".chip")) ev.preventDefault();
+		if (ev.target.closest(".chip, .hit")) ev.preventDefault();
 	});
 	root.addEventListener("click", (ev) => {
-		const c = ev.target.closest(".chip");
+		const c = ev.target.closest(".chip, .hit");
 		if (!c) return;
 		if (suppressClick) return;
 		const index = Number(c.dataset.index);
@@ -861,10 +1096,11 @@ function jobSheet(job, { onDone } = {}) {
 			j.steps.map((st) => {
 				let detail = st.detail || "";
 				if (st.key === "verify" && st.state === "running" && /^\d+$/.test(detail)) detail = t("job.seconds", { n: detail });
+				if (st.key === "verify" && st.state === "running" && /^stable:\d+$/.test(detail)) detail = t("job.stable", { n: detail.split(":")[1] });
 				if (j.type === "checkUpdates" && st.state === "done") detail = Number(detail) ? t("job.updatesFound", { n: detail }) : t("job.noUpdates");
 				if (st.key === "pull" && detail === "same") detail = t("job.noUpdates");
 				const ic = st.state === "done" ? icon("check") : st.state === "failed" ? icon("x") : null;
-				return h("div", { class: `step ${st.state}` }, h("div", { class: "ic" }, ic), h("div", { class: "grow" }, h("div", { class: "name" }, t(`step.${st.label}`)), detail ? h("div", { class: "detail" }, detail) : null));
+				return h("div", { class: `step st-${st.state}` }, h("div", { class: "ic" }, ic), h("div", { class: "grow" }, h("div", { class: "name" }, t(`step.${st.label}`)), detail ? h("div", { class: "detail" }, detail) : null));
 			})
 		);
 		const parts = [steps];
@@ -878,7 +1114,14 @@ function jobSheet(job, { onDone } = {}) {
 		let j;
 		try {
 			j = await api("GET", `/api/job/${job.id}`);
-		} catch {
+		} catch (err) {
+			if (s.closed) return;
+			if (/Unknown job/.test(err.message)) {
+				// the manager was restarted and has forgotten the job
+				fill(s.body, h("div", { class: "note warn" }, t("job.lost")), h("button", { class: "btn block", style: "margin-top:14px", onclick: () => s.close() }, t("job.close")));
+				refresh();
+				return;
+			}
 			timer = setTimeout(poll, 1500);
 			return;
 		}
@@ -920,12 +1163,7 @@ function modulesView() {
 	const m = S.modules;
 	const wrap = h("div");
 	wrap.append(
-		h(
-			"div",
-			{ class: "btn-row", style: "margin-top:4px" },
-			h("button", { class: "btn primary", onclick: () => catalogSheet() }, icon("plus"), t("modules.find")),
-			h("button", { class: "btn", onclick: checkUpdates }, icon("refresh"), t("modules.checkUpdates"))
-		)
+		h("button", { class: "btn primary block", style: "margin-top:4px", onclick: () => catalogSheet() }, icon("plus"), t("modules.find"))
 	);
 	if (!m) return wrap;
 	const withUpdate = m.modules.filter((x) => x.update && x.update.behind > 0);
@@ -933,8 +1171,8 @@ function modulesView() {
 		h(
 			"div",
 			{ class: "section-title" },
-			h("span", {}, `${t("modules.installed")} · ${m.checked ? t("modules.checked", { t: ago(m.checked) }) : t("modules.never")}`),
-			withUpdate.length > 1 ? h("button", { onclick: () => updateAll(withUpdate.map((x) => x.name)) }, t("modules.updateAll")) : null
+			h("span", {}, `${t("modules.installed")} · ${m.checking ? t("modules.checking") : m.checked ? t("modules.checked", { t: ago(m.checked) }) : t("modules.never")}`),
+			withUpdate.length > 1 ? h("button", { onclick: () => updateAll(withUpdate.map((x) => x.name)) }, t("modules.updateAll")) : h("button", { onclick: checkUpdates, disabled: !!m.checking }, t("modules.checkNow"))
 		)
 	);
 	if (!m.modules.length) {
@@ -1182,8 +1420,9 @@ function systemView() {
 		h(
 			"div",
 			{ class: "card" },
-			h("div", { class: "status-line" }, h("div", { class: `dot ${st ? (running ? "ok" : "bad") : ""}` }), h("div", { class: "grow" }, h("div", { class: "title", style: "font-weight:650" }, st ? (running ? t("system.running") : t("system.stopped")) : t("system.unknown")), sub.length ? h("div", { class: "sub small muted" }, sub.join(" · ")) : null), h("button", { class: "btn", onclick: restartMirror }, t("system.restart"))),
-			st ? h("div", { class: "stat-grid" }, stat(t("system.version"), st.version ? `MagicMirror ${st.version}` : "–"), stat(t("system.process"), p && p.found ? p.name : "–"), stat(t("system.memory"), p && p.memory ? `${Math.round(p.memory / 1048576)} MB` : "–"), stat(t("system.restarts"), p && p.restarts !== undefined ? String(p.restarts) : "–")) : null
+			h("div", { class: "status-line" }, h("div", { class: `dot ${st ? (running ? "ok" : "bad") : ""}` }), h("div", { class: "grow" }, h("div", { class: "title", style: "font-weight:650" }, st ? (running ? t("system.running") : t("system.stopped")) : t("system.unknown")), sub.length ? h("div", { class: "sub small muted" }, sub.join(" · ")) : null), h("button", { class: "btn", onclick: restartMirror, disabled: !!S.restarting }, S.restarting ? t("system.restarting", { n: S.restarting.sec || "" }).trim() : t("system.restart"))),
+			S.restartError ? h("div", { class: "note bad", style: "margin:0 16px 14px" }, S.restartError) : null,
+			st ? h("div", { class: "stat-grid" }, stat(t("system.version"), st.version ? `MagicMirror ${st.version}` : "–"), stat(t("system.process"), p && p.found ? p.name : "–"), stat(t("system.restarts"), p && p.restarts !== undefined ? String(p.restarts) : "–")) : null
 		)
 	);
 
@@ -1260,9 +1499,35 @@ async function historySheet(entry) {
 	);
 }
 
+// Restart right from the status card; no extra window.
 async function restartMirror() {
 	const job = await guard(() => api("POST", "/api/restart"));
-	if (job) jobSheet(job, { onDone: loadStatus });
+	if (!job) return;
+	S.restarting = { sec: 0 };
+	S.restartError = null;
+	const redraw = () => S.tab === "system" && !document.querySelector(".sheet") && renderView();
+	redraw();
+	for (;;) {
+		await new Promise((r) => setTimeout(r, 800));
+		let j;
+		try {
+			j = await api("GET", `/api/job/${job.id}`);
+		} catch {
+			continue;
+		}
+		const verify = j.steps.find((x) => x.key === "verify");
+		S.restarting.sec = verify && /^\d+$/.test(verify.detail) ? verify.detail : "";
+		if (j.status === "running") {
+			redraw();
+			continue;
+		}
+		S.restarting = null;
+		if (j.status === "done") toast(t("system.restarted"));
+		else S.restartError = (j.result && j.result.reason) || j.error || t("job.failed");
+		await loadStatus();
+		redraw();
+		return;
+	}
 }
 
 async function configSheet() {
