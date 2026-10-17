@@ -18,8 +18,10 @@ const { readDefaults } = require("./lib/defaults");
 const { UserError } = require("./lib/errors");
 const { writeAtomic, readJSON, writeJSON } = require("./lib/util");
 const { setupDemo } = require("./lib/demo");
+const { Preview } = require("./lib/preview");
 
 const PORT = Number(process.env.PORT) || 8090;
+const PREVIEW_PORT = process.env.PREVIEW_PORT === "0" ? 0 : Number(process.env.PREVIEW_PORT) || PORT + 1;
 const HOST = process.env.HOST || "0.0.0.0";
 const DEMO = process.env.DEMO === "1";
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, "data"));
@@ -48,7 +50,7 @@ const catalog = new Catalog(DATA_DIR);
 // ---------- manager settings (shared by all devices) ----------
 
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
-const settings = () => ({ orientation: "portrait", ...readJSON(SETTINGS_FILE, {}) });
+const settings = () => ({ orientation: "portrait", view: "live", ...readJSON(SETTINGS_FILE, {}) });
 
 // ---------- working copy: the draft if there is one, otherwise config.js ----------
 
@@ -93,6 +95,8 @@ function state() {
 		version: VERSION,
 		demo: DEMO,
 		settings: settings(),
+		preview: preview && preview.server ? { port: PREVIEW_PORT } : null,
+		rev: mirror.configHash(w.text),
 		mm: { dir: mirror.dir, version: mirror.version(), configPath: mirror.configPath },
 		positions: mirror.positions(),
 		builtins: mirror.builtinModules(),
@@ -247,6 +251,7 @@ route("POST", "/api/op", (body) => {
 route("POST", "/api/settings", (body) => {
 	const next = settings();
 	if (body.orientation === "portrait" || body.orientation === "landscape") next.orientation = body.orientation;
+	if (body.view === "live" || body.view === "sketch") next.view = body.view;
 	writeJSON(SETTINGS_FILE, next);
 	return next;
 });
@@ -398,6 +403,10 @@ const server = http.createServer(async (req, res) => {
 		send(req, res, user ? 400 : 500, { error: err.message || String(err) });
 	}
 });
+
+// Live preview of the draft on its own port (not in demo mode: there is no real mirror).
+const preview = DEMO || !PREVIEW_PORT ? null : new Preview({ port: PREVIEW_PORT, host: HOST, mirror, draftText: () => working().text });
+if (preview) preview.start();
 
 server.listen(PORT, HOST, () => {
 	console.log(`MagicMirror Manager ${VERSION} on http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}`);
