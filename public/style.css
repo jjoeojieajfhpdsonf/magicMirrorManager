@@ -487,3 +487,10 @@ select.input.select { appearance: none; -webkit-appearance: none; padding-right:
 }
 
 .frozen-note { margin: 0 0 4px; }
+
+/* questions: the text wraps, the window is narrow */
+.sheet.confirm .sheet-head { align-items: flex-start; }
+.sheet.confirm .sheet-head h2 { white-space: normal; overflow: visible; font-size: 17px; line-height: 1.45; font-weight: 600; }
+@media (min-width: 760px) {
+	.sheet.confirm { width: 460px; }
+}

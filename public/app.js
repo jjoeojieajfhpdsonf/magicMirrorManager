@@ -865,6 +865,7 @@ function confirmSheet(text, yesLabel, danger = false) {
 	return new Promise((resolve) => {
 		let answer = false;
 		const s = openSheet({ onClose: () => resolve(answer) });
+		s.sheet.classList.add("confirm");
 		s.setHead(text);
 		s.body.append(
 			h(
@@ -1008,7 +1009,7 @@ async function entrySheet(index, host = null) {
 		const setValue = async (value) => {
 			if (def && def.simple && value === def.value) return isSet ? op({ op: "resetOption", key }) : undefined;
 			if (typeof value === "number" && def && typeof def.value === "number" && Math.abs(value) > Math.max(100000, Math.abs(def.value) * 1000)) {
-				if (!(await confirmSheet(t("entry.hugeConfirm", { key, value: value.toLocaleString(), def: def.value }), t("entry.setAnyway"), true))) return draw();
+				if (!(await confirmSheet(t("entry.hugeConfirm", { key, value: value.toLocaleString(LANG === "de" ? "de-CH" : "en"), def: def.value }), t("entry.setAnyway"), true))) return draw();
 			}
 			return op({ op: "setOption", key, value });
 		};
