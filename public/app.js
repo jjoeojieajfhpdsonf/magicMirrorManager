@@ -1401,10 +1401,12 @@ function seasonSection() {
 				const range = `${dayLabel(ev.from)} – ${dayLabel(ev.until)}`;
 				const head = h("div", { class: "season-head" }, h("span", { class: "title" }, t(`season.${ev.id}`)), h("span", { class: "sub small muted" }, ev.active ? range : t("season.soon", { n: ev.inDays, range })));
 				const items = [];
+				// "Halloween" under "Halloween" says the same twice: call it "your module" then
+				const nameFor = (module) => (moduleLabel(module).toLowerCase() === t(`season.${ev.id}`).toLowerCase() ? t("season.yourModule") : moduleLabel(module));
 				// on the mirror already: offer the window (or show it)
 				for (const e of ev.used) {
 					const scheduled = e.schedule && e.schedule.join() === [ev.from, ev.until].join();
-					items.push(h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(e.module)), h("div", { class: "sub" }, scheduled ? t("season.scheduled", { range }) : e.disabled ? t("season.off") : t("modules.used"))),
+					items.push(h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, nameFor(e.module)), h("div", { class: "sub" }, scheduled ? t("season.scheduled", { range }) : e.disabled ? t("season.off") : t("modules.used"))),
 						scheduled ? null : h("button", { class: "btn", onclick: async () => {
 							const res = await guard(() => api("POST", "/api/op", { op: "setSchedule", index: e.index, module: e.module, from: ev.from, until: ev.until }));
 							if (res) {
@@ -1417,7 +1419,7 @@ function seasonSection() {
 				}
 				// installed, but not on the mirror
 				for (const name of ev.idle) {
-					items.push(h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(name)), h("div", { class: "sub" }, t("modules.unused"))),
+					items.push(h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, nameFor(name)), h("div", { class: "sub" }, t("modules.unused"))),
 						h("button", { class: "btn", onclick: async () => {
 							let res = await guard(() => api("POST", "/api/op", { op: "add", module: name, position: "fullscreen_above" }));
 							if (!res) return;
