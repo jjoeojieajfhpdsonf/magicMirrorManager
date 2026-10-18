@@ -932,7 +932,16 @@ async function entrySheet(index, host = null) {
 
 	function draw() {
 		const entry = S.state.entries[idx] || {};
-		const sw = h("label", { class: "switch", title: t("entry.on") }, h("input", { type: "checkbox", checked: !d.disabled, onchange: (e) => op({ op: "toggle", disabled: !e.target.checked }) }), h("span"));
+		const sw = h("label", { class: "switch", title: t("entry.on") }, h("input", { type: "checkbox", checked: !d.disabled, onchange: async (e) => {
+			const on = e.target.checked;
+			// a date window would switch it off again within the hour
+			if (on && d.schedule && !inWindowToday(d.schedule)) {
+				const range = `${dayLabel(d.schedule[0])} – ${dayLabel(d.schedule[1])}`;
+				if (!(await confirmSheet(t("schedule.onConfirm", { m: moduleLabel(d.module), range }), t("schedule.onAnyway")))) return draw();
+				await op({ op: "clearSchedule" }, { reload: false });
+			}
+			op({ op: "toggle", disabled: !on });
+		} }), h("span"));
 		s.setHead(moduleLabel(d.module), d.module !== moduleLabel(d.module) ? d.module : null, sw);
 
 		const parts = [];
@@ -1395,7 +1404,6 @@ function seasonSection() {
 	const box = h("div");
 	api("GET", "/api/suggestions")
 		.then((r) => {
-			if (!r.events.length) return;
 			const rows = [];
 			for (const ev of r.events) {
 				const range = `${dayLabel(ev.from)} – ${dayLabel(ev.until)}`;
@@ -1438,6 +1446,16 @@ function seasonSection() {
 				}
 				rows.push(h("div", { class: "card season" }, head, items));
 			}
+			const planned = S.state.entries.filter((e) => e.module && e.schedule);
+			if (planned.length) {
+				rows.push(h("div", { class: "card season" }, h("div", { class: "season-head" }, h("span", { class: "title" }, t("season.planned"))),
+					planned.map((e) => {
+						const range = `${dayLabel(e.schedule[0])} – ${dayLabel(e.schedule[1])}`;
+						const active = inWindowToday(e.schedule);
+						return h("button", { class: "row", onclick: () => openOnMirror(e.module) }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(e.module)), h("div", { class: "sub" }, `${range} · ${active ? t("season.activeNow") : t("schedule.from", { d: dayLabel(e.schedule[0]) })}`)), icon("chev"));
+					})));
+			}
+			if (!rows.length) return;
 			fill(box, h("div", { class: "section-title" }, t("season.title")), rows);
 		})
 		.catch(() => {});
@@ -1895,6 +1913,13 @@ async function configSheet() {
 			}, t("system.configCheck"))
 		)
 	);
+}
+
+// Is today inside a yearly window ["MM-DD", "MM-DD"]?
+function inWindowToday([from, until]) {
+	const d = new Date();
+	const x = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+	return from <= until ? x >= from && x <= until : x >= from || x <= until;
 }
 
 // "12-01" -> "1. Dez." / "Dec 1"
