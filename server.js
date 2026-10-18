@@ -14,7 +14,7 @@ const { Modules } = require("./lib/modules");
 const { Catalog } = require("./lib/catalog");
 const C = require("./lib/config");
 const { diffLines } = require("./lib/diff");
-const { readDefaults } = require("./lib/defaults");
+const { readDefaults, readSchema } = require("./lib/defaults");
 const { UserError } = require("./lib/errors");
 const { writeAtomic, readJSON, writeJSON } = require("./lib/util");
 const { setupDemo } = require("./lib/demo");
@@ -313,7 +313,8 @@ route("GET", "/api/entry/:index", (body, p) => {
 	const w = working();
 	const d = C.entryDetails(w.text, Number(p.index));
 	const defaults = d.module ? readDefaults(mirror.moduleMainFile(d.module)) : null;
-	return { ...d, defaults, builtin: mirror.builtinModules().includes(d.module), info: d.module ? modules.info(d.module, catalog) : null };
+	const schema = d.module ? readSchema(mirror.moduleFolder(d.module)) : null;
+	return { ...d, defaults, schema, builtin: mirror.builtinModules().includes(d.module), info: d.module ? modules.info(d.module, catalog) : null };
 });
 
 route("POST", "/api/apply", () => {

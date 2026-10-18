@@ -996,6 +996,7 @@ async function entrySheet(index, host = null) {
 			wrap.append(h("div", { class: "note" }, t("entry.configIsCode")));
 			return wrap;
 		}
+		if (d.schema) return describedSettings();
 		const defs = d.defaults || [];
 		const cur = new Map(d.options.map((o) => [o.key, o]));
 		const set = [...cur.keys()];
@@ -1014,6 +1015,33 @@ async function entrySheet(index, host = null) {
 		}
 		if (!defs.length && !set.length) wrap.append(h("div", { class: "note" }, t("entry.noDefaults")));
 		wrap.append(customAdder());
+		return wrap;
+	}
+
+	// The module describes its settings itself (mm-manager.json): labelled fields instead of raw keys.
+	function describedSettings() {
+		const defs = d.defaults || [];
+		const cur = new Map(d.options.map((o) => [o.key, o]));
+		const def = (key) => defs.find((x) => x.key === key);
+		const known = new Set(d.schema.fields.map((f) => f.key));
+		// a value written as code (a function, a variable …) can't be shown in a form
+		const asCode = d.schema.fields.filter((f) => cur.has(f.key) && !cur.get(f.key).simple && !cur.get(f.key).data).map((f) => f.key);
+		const schema = { ...d.schema, fields: d.schema.fields.filter((f) => !asCode.includes(f.key)) };
+		const valueOf = (key) => {
+			const o = cur.get(key);
+			if (o) return o.value;
+			const x = def(key);
+			return x && !x.dynamic ? x.value : (schema.fields.find((f) => f.key === key) || {}).default;
+		};
+		const save = (key, value) => {
+			const x = def(key);
+			if (x && (x.simple || x.data) && sameData(value, x.value)) return cur.has(key) ? op({ op: "resetOption", key }) : undefined;
+			return op({ op: "setOption", key, value });
+		};
+		const wrap = schemaSettings(schema, valueOf, (key) => cur.has(key), save, (key) => op({ op: "resetOption", key }));
+		// settings the description doesn't know (or code) stay editable the usual way
+		const rest = [...asCode, ...[...cur.keys()].filter((k) => !known.has(k))];
+		if (rest.length) wrap.append(h("div", { class: "section-sub" }, t("schema.other")), h("div", { class: "card" }, rest.map((key) => optionField(key, cur.get(key), def(key)))));
 		return wrap;
 	}
 

@@ -3,7 +3,7 @@
 A small web app to manage the modules of a [MagicMirror²](https://magicmirror.builders/), from your phone or laptop, without ever breaking the mirror.
 
 - **Arrange** modules with drag and drop on a **live preview** of your mirror. The preview already shows your unsaved changes, with real content.
-- **Configure** modules without touching code: switches, fields, dropdowns and forms for lists. Default values and possible choices are read straight from each module's source code.
+- **Configure** modules without touching code: switches, fields, dropdowns and forms for lists. Default values and possible choices are read straight from each module's source code. Modules can also [describe their settings](docs/module-schema.md) for an even simpler form.
 - **Find and install** modules from the [official module list](https://modules.magicmirror.builders/).
 - **Update** modules (checked automatically every 6 hours), see what changed, and undo an update with one tap. Uninstalled modules go to a trash you can restore from.
 - **Update MagicMirror itself**, with the same safety net.
@@ -147,6 +147,10 @@ npm run demo
 ```
 
 This starts a demo on <http://localhost:8090> with a simulated mirror (data in `./data-demo`). Edits, backups, rollbacks and even installs from GitHub work for real on the demo files. Only the restart is simulated.
+
+## For module authors
+
+Modules can describe their settings in a small `mm-manager.json` next to the main file: readable labels in several languages, help texts, dropdowns, sliders, date pickers, switches per entry and cards for lists. Without the file, the manager works as before. See [docs/module-schema.md](docs/module-schema.md).
 
 ## Development
 
