@@ -1399,11 +1399,26 @@ function moduleRow(m) {
 	);
 }
 
+// Sections that load their data: show the last known data at once and redraw only when the
+// server sends something different (no empty-then-filled flicker on every visit).
+function cachedSection(box, key, url, show) {
+	S.cache = S.cache || {};
+	const shown = S.cache[key];
+	if (shown) show(shown);
+	api("GET", url)
+		.then((r) => {
+			S.cache[key] = r;
+			if (!shown || JSON.stringify(r) !== JSON.stringify(shown)) show(r);
+		})
+		.catch(() => {});
+	return box;
+}
+
 // "Fits the season": events on now or soon, with installed and new modules for them.
 function seasonSection() {
 	const box = h("div");
-	api("GET", "/api/suggestions")
-		.then((r) => {
+	const show = (r) => {
+		fill(box);
 			const rows = [];
 			for (const ev of r.events) {
 				const range = `${dayLabel(ev.from)} – ${dayLabel(ev.until)}`;
@@ -1457,22 +1472,21 @@ function seasonSection() {
 			}
 			if (!rows.length) return;
 			fill(box, h("div", { class: "section-title" }, t("season.title")), rows);
-		})
-		.catch(() => {});
-	return box;
+	};
+	return cachedSection(box, "suggestions", "/api/suggestions", show);
 }
 
 // Uninstalled modules wait in the manager's trash (the last 10).
 function trashSection() {
 	const box = h("div");
-	api("GET", "/api/trash")
-		.then((r) => {
+	const show = (r) => {
+		fill(box);
 			if (!r.items.length) return;
 			const when = (s) => {
 				const [d, tm] = s.split("_");
 				return new Date(`${d}T${tm.replace(/-/g, ":")}`).toLocaleString(LANG === "de" ? "de-CH" : "en-GB", { dateStyle: "medium", timeStyle: "short" });
 			};
-			const list = h("div", { class: "card", hidden: true }, r.items.map((it) =>
+			const list = h("div", { class: "card", hidden: !S.trashOpen }, r.items.map((it) =>
 				h("div", { class: "row" }, h("div", { class: "grow" }, h("div", { class: "title" }, moduleLabel(it.name)), h("div", { class: "sub" }, when(it.time))),
 					h("button", { class: "btn", onclick: async () => {
 						const job = await guard(() => api("POST", `/api/trash/${encodeURIComponent(it.id)}/restore`));
@@ -1483,14 +1497,14 @@ function trashSection() {
 						if (await guard(() => api("POST", `/api/trash/${encodeURIComponent(it.id)}/delete`))) renderView();
 					} }, icon("close")))
 			));
-			const toggle = h("button", { class: "row more-toggle", onclick: () => {
-				list.hidden = !list.hidden;
-				toggle.classList.toggle("open", !list.hidden);
+			const toggle = h("button", { class: `row more-toggle${S.trashOpen ? " open" : ""}`, onclick: () => {
+				S.trashOpen = !S.trashOpen;
+				list.hidden = !S.trashOpen;
+				toggle.classList.toggle("open", S.trashOpen);
 			} }, h("span", { class: "grow" }, t("trash.title", { n: r.items.length })), h("span", { class: "chev", html: ICONS.chev }));
 			fill(box, h("div", { class: "card", style: "margin-top:16px" }, toggle), h("div", { style: "margin-top:8px" }, list));
-		})
-		.catch(() => {});
-	return box;
+	};
+	return cachedSection(box, "trash", "/api/trash", show);
 }
 
 async function checkUpdates() {
