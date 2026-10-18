@@ -5,6 +5,7 @@
 - Seasonal suggestions in the modules tab (Halloween, Christmas, winter, New Year's Eve, Valentine's Day, Easter): modules already installed, and matching ones from the official list.
 - Date windows per module: `showBetween: ["10-15", "11-01"]` next to the module in `config.js`; the manager switches it on and off every year (checked hourly, applied with check and rollback).
 - Modules can describe their settings in `mm-manager.json` (labels in several languages, help texts, sliders, date pickers, a switch per entry, cards for lists, an "Advanced" section). See `docs/module-schema.md`.
+- "Check now" runs in the background without a window. If another action is running (e.g. a date window switching a module off), it waits instead of failing. "Another action is still running" now says which one.
 - Dropdown values are also found in helper scripts next to the module's main file.
 - Guard against settings that freeze the mirror: huge numbers ask first; a draft whose preview hangs is remembered, shown as a sketch with a warning and applying asks first.
 

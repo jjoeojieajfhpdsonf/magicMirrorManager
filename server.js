@@ -385,9 +385,23 @@ route("POST", "/api/history/:id/restore", (body, p) => {
 });
 
 // modules: installed, updates, install, uninstall, catalog
-route("GET", "/api/modules", () => modules.list(catalog, working().text));
+route("GET", "/api/modules", () => ({ ...modules.list(catalog, working().text), checking: !!(modules.checking || checkRequest) }));
 
-route("POST", "/api/modules/check-updates", () => jobs.start("checkUpdates", "checkUpdates", [{ key: "fetch", label: "fetch" }], (api) => modules.checkUpdates(api)));
+// "Check now" runs in the background (the list shows "checking …"). If another action is
+// running (e.g. a scheduled switch restarting the mirror), it waits for it instead of failing.
+let checkRequest = null;
+route("POST", "/api/modules/check-updates", () => {
+	if (!checkRequest) {
+		checkRequest = (async () => {
+			while (jobs.busy()) await new Promise((r) => setTimeout(r, 1000));
+			await modules.checkUpdates({ step() {}, log() {} });
+			if (!DEMO) await core.check();
+		})()
+			.catch((err) => console.error(`Update check failed: ${err.message}`))
+			.finally(() => (checkRequest = null));
+	}
+	return { checking: true };
+});
 
 route("POST", "/api/modules/:name/update", (body, p) =>
 	jobs.start("update", p.name, modules.updateSteps(), (api) => modules.update(api, p.name, { restartAndVerify, isActive: () => isActive(p.name) }))
@@ -435,7 +449,7 @@ route("GET", "/api/trash", () => ({ items: modules.trash() }));
 route("POST", "/api/trash/:id/restore", (body, p) => jobs.start("untrash", p.id.replace(/-\d{4}-.*$/, ""), [{ key: "restore", label: "restore" }], (api) => modules.restoreFromTrash(api, p.id)));
 
 route("POST", "/api/trash/:id/delete", (body, p) => {
-	if (jobs.busy()) throw new UserError("Another action is still running. Please wait until it has finished.");
+	if (jobs.busy()) throw jobs.busyError();
 	modules.deleteFromTrash(p.id);
 	return { items: modules.trash() };
 });
@@ -540,7 +554,7 @@ setInterval(runSchedules, 60 * 60 * 1000).unref();
 
 const UPDATE_CHECK_HOURS = Number(process.env.UPDATE_CHECK_HOURS) || 6;
 async function backgroundUpdateCheck() {
-	if (jobs.busy() || modules.checking) return;
+	if (jobs.busy() || modules.checking || checkRequest) return;
 	try {
 		await modules.checkUpdates({ step() {}, log() {} });
 		if (!DEMO) await core.check();

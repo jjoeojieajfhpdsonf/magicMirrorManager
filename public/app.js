@@ -1535,9 +1535,21 @@ function trashSection() {
 	return cachedSection(box, "trash", "/api/trash", show);
 }
 
+// Runs on the server in the background; the list says "checking …" until it is done.
 async function checkUpdates() {
-	const job = await guard(() => api("POST", "/api/modules/check-updates"));
-	if (job) jobSheet(job, { onDone: () => loadModules().then(() => { renderTabs(); renderView(); }) });
+	if (!(await guard(() => api("POST", "/api/modules/check-updates")))) return;
+	if (S.modules) S.modules.checking = true;
+	if (S.tab === "modules" && !document.querySelector(".sheet")) renderView();
+	while (S.modules && S.modules.checking) {
+		await new Promise((r) => setTimeout(r, 2000));
+		await loadModules().catch(() => {});
+	}
+	if (S.modules) {
+		const n = S.modules.modules.filter((x) => x.update && x.update.behind > 0).length;
+		toast(n ? t("job.updatesFound", { n }) : t("job.noUpdates"));
+	}
+	renderTabs();
+	if (S.tab === "modules" && !document.querySelector(".sheet")) renderView();
 }
 
 async function updateAll(names) {
